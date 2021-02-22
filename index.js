@@ -71,7 +71,7 @@ async function checkAndNotify() {
 }
 
 async function heartbeat() {
-  const message = `The last check was ${lastCheckTimestamp.format()}, with a capacity of ${lastCapacityString}`
+  const message = `The last check was ${lastCheckTimestamp.calendar()}, with a capacity of ${lastCapacityString}`
 
   try {
     // Make the heartbeat notification silent
