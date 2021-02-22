@@ -34,10 +34,11 @@ function hasCapacity(capacityString) {
   return firstChar > 0
 }
 
-function sendMessageToChannel(message, channelId) {
+function sendMessageToChannel(message, channelId, options) {
   const queryString = {
     chat_id: channelId,
-    text: message
+    text: message,
+    ...options
   }
   return axios.post(`https://api.telegram.org/bot${TELEGRAM_BOT_KEY}/sendMessage`, qs.stringify(queryString))
 }
@@ -73,7 +74,8 @@ async function heartbeat() {
   const message = `The last check was ${lastCheckTimestamp.format()}, with a capacity of ${lastCapacityString}`
 
   try {
-    await sendMessageToChannel(message, CHANNEL_ID)
+    // Make the heartbeat notification silent
+    await sendMessageToChannel(message, CHANNEL_ID, {disable_notification: true})
   } catch (error) {
     notifyError(error)
   }
