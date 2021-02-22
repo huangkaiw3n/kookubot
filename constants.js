@@ -5,9 +5,12 @@ const CHECK_URL = "https://www.picktime.com/book/getClassAppSlots?_=161396718677
 
 const SLOT_ID = "202103011930_f71d7b90-4430-4335-8967-b0f424173b15_0252d90b-ae01-47bf-addb-d405084dff3e"
 
+const HTTP_PORT = process.env.PORT || 3000
+
 module.exports = {
   TELEGRAM_BOT_KEY,
   CHANNEL_ID,
   CHECK_URL,
   SLOT_ID,
+  HTTP_PORT,
 }

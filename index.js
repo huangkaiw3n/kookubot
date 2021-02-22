@@ -7,12 +7,14 @@ const moment = require('moment-timezone')
 moment.tz.setDefault('Asia/Singapore')
 
 const schedule = require('node-schedule')
+const http = require('http')
 
 const {
   TELEGRAM_BOT_KEY,
   CHANNEL_ID,
   CHECK_URL,
   SLOT_ID,
+  HTTP_PORT,
 } = require('./constants')
 
 let lastCheckTimestamp = moment()
@@ -89,3 +91,10 @@ checkAndNotify().then(() => heartbeat())
 
 const mainJob = schedule.scheduleJob(every5Min, checkAndNotify)
 const heartbeatJob = schedule.scheduleJob(everyHour, heartbeat)
+
+http.createServer(function (request, response){
+  response.writeHead(200, {'Content-Type':'text/plain'})
+  response.end('Okay')
+}).listen(HTTP_PORT)
+
+console.log(`Running server at port ${HTTP_PORT}`)
