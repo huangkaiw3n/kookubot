@@ -68,7 +68,7 @@ async function checkAndNotify() {
     const capacityString = await getCapacityString()
 
     // Notify channel if there's 2 capacity
-    if (!has2OrMoreCapacity(capacityString)) {
+    if (has2OrMoreCapacity(capacityString)) {
       notifyHasSlot('ANGELA GO BOOK NOW!!!!! https://www.climbcentral.sg/timeslot/ccsh-first-timer')
     }
 
