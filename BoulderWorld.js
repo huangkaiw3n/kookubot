@@ -26,7 +26,7 @@ function getCapacityStringBySlotId(slotId) {
 // Capacity string is like 1/20, 4/30, 0/25
 // It has capacity if first char > 0
 function hasCapacity(capacityString) {
-  console.log('Capacity check', capacityString)
+  console.log('BW Capacity check', capacityString)
   console.log(moment().format())
   const firstChar = _.first(capacityString)
   return firstChar > 0
@@ -39,7 +39,7 @@ async function checkAndNotify() {
 
     // Notify channel if there's capacity
     if (hasCapacity(capacityString)) {
-      notifyHasSlot()
+      notifyHasSlot('Boulderworld has slot now! Go book!')
     }
 
     lastCapacityString = capacityString
@@ -50,7 +50,7 @@ async function checkAndNotify() {
 }
 
 async function heartbeat() {
-  const message = `The last check was ${lastCheckTimestamp.calendar()}, with a capacity of ${lastCapacityString}`
+  const message = `The last BW check was ${lastCheckTimestamp.calendar()}, with a capacity of ${lastCapacityString}`
 
   try {
     // Make the heartbeat notification silent

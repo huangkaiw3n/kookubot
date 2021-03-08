@@ -9,37 +9,67 @@ const {
   notifyError,
 } = require('./Telegram')
 const {
-  BW_CHECK_URL,
-  BW_SLOT_ID,
+  CCSH_CHECK_URL,
+  CCSH_WIDGET_POST_STRING,
 } = require('./constants')
 
 let lastCheckTimestamp = moment()
 let lastCapacityString = null
 
-// Calls the bw endpoint and retrieve the capacity string based on the slot id
-function getCapacityStringBySlotId(slotId) {
-  return axios.get(BW_CHECK_URL)
-    .then(res => res.data)
-    .then(resData => _.get(resData, `subMetadata.${slotId}`))
+
+String.prototype.extract = function(prefix, suffix) {
+	s = this;
+	var i = s.indexOf(prefix);
+	if (i >= 0) {
+		s = s.substring(i + prefix.length);
+	}
+	else {
+		return '';
+	}
+	if (suffix) {
+		i = s.indexOf(suffix);
+		if (i >= 0) {
+			s = s.substring(0, i);
+		}
+		else {
+		  return '';
+		}
+	}
+	return s;
+};
+
+function removeLineBreaks(stringWithLinebreaks) {
+  return stringWithLinebreaks ? stringWithLinebreaks.replace(/(\r\n|\n|\r|\"|<br>)/gm, '') : ''
 }
 
-// Capacity string is like 1/20, 4/30, 0/25
+// Calls the CCSH Widget endpoint and retrieve the html string
+function getCapacityString() {
+  return axios.post(CCSH_CHECK_URL, `"${CCSH_WIDGET_POST_STRING}"`)
+    .then(res => res.data)
+    .then(resData => {
+      const htmlString = removeLineBreaks(_.get(resData, 'event_list_html'))
+      return htmlString.extract('Thu, March 11, 7 PM to  9:20 PM</td><td><strong>Availability</strong>', '</td><td>')
+    })
+}
+
+// Capacity string is like
+// 1 space, 2 space, Available, Full.&nbsp;Please make a different selection.
 // It has capacity if first char > 0
-function hasCapacity(capacityString) {
-  console.log('Capacity check', capacityString)
+function has2OrMoreCapacity(capacityString) {
+  console.log('CCSH Capacity check', capacityString)
   console.log(moment().format())
-  const firstChar = _.first(capacityString)
-  return firstChar > 0
+
+  return capacityString === '2 space' || capacityString === 'Available'
 }
 
 async function checkAndNotify() {
   try {
-    // Fetch capacity string
-    const capacityString = await getCapacityStringBySlotId(BW_SLOT_ID)
+    // Fetch capacity String
+    const capacityString = await getCapacityString()
 
-    // Notify channel if there's capacity
-    if (hasCapacity(capacityString)) {
-      notifyHasSlot()
+    // Notify channel if there's 2 capacity
+    if (!has2OrMoreCapacity(capacityString)) {
+      notifyHasSlot('ANGELA GO BOOK NOW!!!!! https://www.climbcentral.sg/timeslot/ccsh-first-timer')
     }
 
     lastCapacityString = capacityString
@@ -50,7 +80,7 @@ async function checkAndNotify() {
 }
 
 async function heartbeat() {
-  const message = `The last check was ${lastCheckTimestamp.calendar()}, with a capacity of ${lastCapacityString}`
+  const message = `The last CCSH check was ${lastCheckTimestamp.calendar()}, with a capacity of ${lastCapacityString}`
 
   try {
     // Make the heartbeat notification silent
