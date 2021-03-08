@@ -11,6 +11,7 @@ const {
 const {
   BW_CHECK_URL,
   BW_SLOT_ID,
+  CALENDAR_DISPLAY_FORMAT,
 } = require('./constants')
 
 let lastCheckTimestamp = moment()
@@ -50,7 +51,7 @@ async function checkAndNotify() {
 }
 
 async function heartbeat() {
-  const message = `The last BW check was ${lastCheckTimestamp.calendar()}, with a capacity of ${lastCapacityString}`
+  const message = `The last BW check was ${lastCheckTimestamp.calendar(CALENDAR_DISPLAY_FORMAT)}, with a capacity of ${lastCapacityString}`
 
   try {
     // Make the heartbeat notification silent
