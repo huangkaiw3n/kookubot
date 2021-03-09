@@ -6,7 +6,7 @@ const {
 } = require('./constants')
 
 const BoulderWorld = require('./BoulderWorld')
-const ClimbCentral = require('./ClimbCentral')
+// const ClimbCentral = require('./ClimbCentral')
 
 const every3Min = '*/3 * * * *'
 const everyHour = '0 * * * *'
@@ -16,9 +16,9 @@ BoulderWorld.checkAndNotify().then(() => BoulderWorld.heartbeat())
 schedule.scheduleJob(every3Min, BoulderWorld.checkAndNotify)
 schedule.scheduleJob(everyHour, BoulderWorld.heartbeat)
 
-ClimbCentral.checkAndNotify().then(() => ClimbCentral.heartbeat())
-schedule.scheduleJob(every3Min, ClimbCentral.checkAndNotify)
-schedule.scheduleJob(everyHour, ClimbCentral.heartbeat)
+// ClimbCentral.checkAndNotify().then(() => ClimbCentral.heartbeat())
+// schedule.scheduleJob(every3Min, ClimbCentral.checkAndNotify)
+// schedule.scheduleJob(everyHour, ClimbCentral.heartbeat)
 
 // Attach http port so heroku won't think web dyno failed
 http.createServer(function (request, response){
