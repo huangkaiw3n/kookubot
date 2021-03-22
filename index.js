@@ -8,13 +8,19 @@ const {
 const BoulderWorld = require('./BoulderWorld')
 // const ClimbCentral = require('./ClimbCentral')
 
-const every3Min = '*/3 * * * *'
-const everyHour = '0 * * * *'
+const everyMin = '*/1 * * * *'
+const every12thHour = '0 */12 * * *'
 
-// Run once on process start then schedule
+// Run once on process start
 BoulderWorld.checkAndNotify().then(() => BoulderWorld.heartbeat())
-schedule.scheduleJob(every3Min, BoulderWorld.checkAndNotify)
-schedule.scheduleJob(everyHour, BoulderWorld.heartbeat)
+
+// Run check schedule in 30s interval using 2 schedules, 1 delayed by 30s
+// This is done because cron can't go sub-minute
+schedule.scheduleJob(everyMin, BoulderWorld.checkAndNotify)
+schedule.scheduleJob(everyMin, () => setTimeout(BoulderWorld.checkAndNotify, 3000))
+
+// Set heartbeat every 12th hour
+schedule.scheduleJob(every12thHour, BoulderWorld.heartbeat)
 
 // ClimbCentral.checkAndNotify().then(() => ClimbCentral.heartbeat())
 // schedule.scheduleJob(every3Min, ClimbCentral.checkAndNotify)
