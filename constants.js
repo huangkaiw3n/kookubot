@@ -7,6 +7,10 @@ const BW_SLOT_ID = "202103291930_133537f2-7958-41d9-8a9b-e17beaec5506_0252d90b-a
 const CCSH_CHECK_URL = 'https://app.rockgympro.com/b/widget/?a=equery'
 const CCSH_WIDGET_POST_STRING = 'PreventChromeAutocomplete=&random=6045ac0ddc5d5&iframeid=rgpiframe6045ac0d94c63&mode=e&fctrl_1=offering_guid&offering_guid=a7a63a6ff6384aabb2a5d9151d2c9a08&fctrl_2=course_guid&course_guid=&fctrl_3=limited_to_course_guid_for_offering_guid_a7a63a6ff6384aabb2a5d9151d2c9a08&limited_to_course_guid_for_offering_guid_a7a63a6ff6384aabb2a5d9151d2c9a08=&fctrl_4=show_date&show_date=2021-03-11&fctrl_5=promo_code_a7a63a6ff6384aabb2a5d9151d2c9a08&promo_code_a7a63a6ff6384aabb2a5d9151d2c9a08=&ftagname_0_pcount-pid-1-4815992=pcount&ftagval_0_pcount-pid-1-4815992=1&ftagname_1_pcount-pid-1-4815992=pid&ftagval_1_pcount-pid-1-4815992=4815992&fctrl_6=pcount-pid-1-4815992&pcount-pid-1-4815992=0&ftagname_0_pcount-pid-1-4815993=pcount&ftagval_0_pcount-pid-1-4815993=1&ftagname_1_pcount-pid-1-4815993=pid&ftagval_1_pcount-pid-1-4815993=4815993&fctrl_7=pcount-pid-1-4815993&pcount-pid-1-4815993=0&ftagname_0_pcount-pid-1-4888355=pcount&ftagval_0_pcount-pid-1-4888355=1&ftagname_1_pcount-pid-1-4888355=pid&ftagval_1_pcount-pid-1-4888355=4888355&fctrl_8=pcount-pid-1-4888355&pcount-pid-1-4888355=0&ftagname_0_pcount-pid-1-4852630=pcount&ftagval_0_pcount-pid-1-4852630=1&ftagname_1_pcount-pid-1-4852630=pid&ftagval_1_pcount-pid-1-4852630=4852630&fctrl_9=pcount-pid-1-4852630&pcount-pid-1-4852630=0'
 
+const BFF_CHECK_URL = 'https://app.acuityscheduling.com/schedule.php?action=availableTimes&showSelect=0&fulldate=1&owner=19322912'
+const BFF_POST_STRING = 'type=13677944&calendar=3778158&date=2021-04-01&ignoreAppointment='
+const BFF_HTML_SLOT_TO_MATCH = '2021-04-01 22:15'
+
 const TIME_DISPLAY_FORMAT = '[Today] [at] h:mm:ss:SS A'
 const CALENDAR_DISPLAY_FORMAT = {
   sameDay: TIME_DISPLAY_FORMAT,
@@ -22,6 +26,9 @@ module.exports = {
   BW_SLOT_ID,
   CCSH_CHECK_URL,
   CCSH_WIDGET_POST_STRING,
+  BFF_CHECK_URL,
+  BFF_POST_STRING,
+  BFF_HTML_SLOT_TO_MATCH,
   CALENDAR_DISPLAY_FORMAT,
   HTTP_PORT,
 }
