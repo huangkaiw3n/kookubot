@@ -9,14 +9,21 @@ const {
   notifyError,
 } = require('./Telegram')
 const {
-  CCSH_CHECK_URL,
-  CCSH_WIDGET_POST_STRING,
+  CC_CHECK_URL,
+  CC_WIDGET_POST_STRING,
   CALENDAR_DISPLAY_FORMAT,
 } = require('./constants')
 
 let lastCheckTimestamp = moment()
 let lastCapacityString = null
 
+// Notification message to send when there's a slot
+const NOTIFY_SLOT_MESSAGE = 'CC Funan Mon Apr 5 8pm/8:50pm has slot! https://www.climbcentral.sg/timeslot/ccf'
+
+ // The possible Availability responses when there is space
+const ONE_SPACE = '1 space'
+const TWO_SPACE = '2 space'
+const AVAILABLE = 'Available'
 
 String.prototype.extract = function(prefix, suffix) {
 	s = this;
@@ -45,7 +52,7 @@ function removeLineBreaks(stringWithLinebreaks) {
 
 // Calls the CCSH Widget endpoint and retrieve the html string
 function getCapacityString() {
-  return axios.post(CCSH_CHECK_URL, `"${CCSH_WIDGET_POST_STRING}"`)
+  return axios.post(CC_CHECK_URL, `"${CC_WIDGET_POST_STRING}"`)
     .then(res => res.data)
     .then(resData => {
       const htmlString = removeLineBreaks(_.get(resData, 'event_list_html'))
@@ -53,14 +60,14 @@ function getCapacityString() {
     })
 }
 
-// Capacity string is like
-// 1 space, 2 space, Available, Full.&nbsp;Please make a different selection.
-// It has capacity if first char > 0
+// Has 2 or more capacity
 function has2OrMoreCapacity(capacityString) {
-  console.log('CCSH Capacity check', capacityString)
-  console.log(moment().format())
+  return capacityString === TWO_SPACE || capacityString === AVAILABLE
+}
 
-  return capacityString === '2 space' || capacityString === 'Available'
+// Has at least 1 capacity
+function hasCapacity(capacityString) {
+  return capacityString === ONE_SPACE || has2OrMoreCapacity(capacityString)
 }
 
 async function checkAndNotify() {
@@ -68,9 +75,9 @@ async function checkAndNotify() {
     // Fetch capacity String
     const capacityString = await getCapacityString()
 
-    // Notify channel if there's 2 capacity
-    if (has2OrMoreCapacity(capacityString)) {
-      notifyHasSlot('ANGELA GO BOOK NOW!!!!! https://www.climbcentral.sg/timeslot/ccsh-first-timer')
+    // Notify channel if there's capacity
+    if (hasCapacity(capacityString)) {
+      notifyHasSlot(NOTIFY_SLOT_MESSAGE)
     }
 
     lastCapacityString = capacityString
@@ -81,7 +88,7 @@ async function checkAndNotify() {
 }
 
 async function heartbeat() {
-  const message = `The last CCSH check was ${lastCheckTimestamp.calendar(CALENDAR_DISPLAY_FORMAT)}, with a capacity of ${lastCapacityString}`
+  const message = `The last CC check was ${lastCheckTimestamp.calendar(CALENDAR_DISPLAY_FORMAT)}, with a capacity of ${lastCapacityString}`
 
   try {
     // Make the heartbeat notification silent
