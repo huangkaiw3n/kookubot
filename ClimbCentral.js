@@ -20,11 +20,12 @@ let lastCapacityString = null
 // Notification message to send when there's a slot
 const NOTIFY_SLOT_MESSAGE = 'CC Funan Mon Apr 5 8pm/8:50pm has slot! https://www.climbcentral.sg/timeslot/ccf'
 
- // The possible Availability responses when there is space
+// The possible Availability responses when there is space
 const ONE_SPACE = '1 space'
 const TWO_SPACE = '2 space'
 const AVAILABLE = 'Available'
 
+// Returns string between 2 strings, prefix and suffix
 String.prototype.extract = function(prefix, suffix) {
 	s = this;
 	var i = s.indexOf(prefix);
@@ -51,12 +52,12 @@ function removeLineBreaks(stringWithLinebreaks) {
 }
 
 // Calls the CCSH Widget endpoint and retrieve the html string
-function getCapacityString() {
+function getCapacityString(timeslot) {
   return axios.post(CC_CHECK_URL, `"${CC_WIDGET_POST_STRING}"`)
     .then(res => res.data)
     .then(resData => {
       const htmlString = removeLineBreaks(_.get(resData, 'event_list_html'))
-      return htmlString.extract('Thu, March 11, 7 PM to  9:20 PM</td><td><strong>Availability</strong>', '</td><td>')
+      return htmlString.extract(timeslot + '</td><td><strong>Availability</strong>', '</td><td>')
     })
 }
 
@@ -73,14 +74,18 @@ function hasCapacity(capacityString) {
 async function checkAndNotify() {
   try {
     // Fetch capacity String
-    const capacityString = await getCapacityString()
+    const TIME1 = 'Mon, April 5, 8 PM to  10:20 PM'
+    const TIME2 = 'Mon, April 5, 8:50 PM to  10:50 PM'
+
+    const capacityString1 = await getCapacityString(TIME1)
+    const capacityString2 = await getCapacityString(TIME2)
 
     // Notify channel if there's capacity
-    if (hasCapacity(capacityString)) {
+    if (hasCapacity(capacityString1) || hasCapacity(capacityString2)) {
       notifyHasSlot(NOTIFY_SLOT_MESSAGE)
     }
 
-    lastCapacityString = capacityString
+    lastCapacityString = `${TIME1}: ${capacityString1}\n${TIME2}: ${capacityString2}`
     lastCheckTimestamp = moment()
   } catch (error) {
     notifyError(error)
