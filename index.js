@@ -6,23 +6,23 @@ const {
 } = require('./constants')
 
 // const BoulderWorld = require('./BoulderWorld')
-// const ClimbCentral = require('./ClimbCentral')
-const Bff = require('./Bff')
+const ClimbCentral = require('./ClimbCentral')
+// const Bff = require('./Bff')
 
 const everyMin = '*/1 * * * *'
 const every12thHour = '0 */12 * * *'
 
 /* ============================= BFF ================================================== */
 // Run once on process start
-Bff.checkAndNotify().then(() => Bff.heartbeat())
+// Bff.checkAndNotify().then(() => Bff.heartbeat())
 
 // Run check schedule in 30s interval using 2 schedules, 1 delayed by 30s
-// This is done because cron can't go sub-minute
-schedule.scheduleJob(everyMin, Bff.checkAndNotify)
-schedule.scheduleJob(everyMin, () => setTimeout(Bff.checkAndNotify, 3000))
+// // This is done because cron can't go sub-minute
+// schedule.scheduleJob(everyMin, Bff.checkAndNotify)
+// schedule.scheduleJob(everyMin, () => setTimeout(Bff.checkAndNotify, 3000))
 
 // Set heartbeat every 12th hour
-schedule.scheduleJob(every12thHour, Bff.heartbeat)
+// schedule.scheduleJob(every12thHour, Bff.heartbeat)
 /* ============================= BFF ================================================== */
 
 
@@ -43,9 +43,9 @@ schedule.scheduleJob(every12thHour, Bff.heartbeat)
 
 /* ===================== CLIMBCENTRAL ================================================== */
 
-// ClimbCentral.checkAndNotify().then(() => ClimbCentral.heartbeat())
-// schedule.scheduleJob(every3Min, ClimbCentral.checkAndNotify)
-// schedule.scheduleJob(everyHour, ClimbCentral.heartbeat)
+ClimbCentral.checkAndNotify().then(() => ClimbCentral.heartbeat())
+schedule.scheduleJob(everyMin, ClimbCentral.checkAndNotify)
+schedule.scheduleJob(every12thHour, ClimbCentral.heartbeat)
 
 /* ===================== CLIMBCENTRAL ================================================== */
 
