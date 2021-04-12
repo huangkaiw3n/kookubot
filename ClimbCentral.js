@@ -20,6 +20,10 @@ let lastCapacityString = null
 // Notification message to send when there's a slot
 const NOTIFY_SLOT_MESSAGE = 'CC Stadium Thu Apr 15 8pm/8:50pm has slot! https://www.climbcentral.sg/timeslot/ccsh'
 
+// Capacity String to search for in html response
+const TIME1 = 'Thu, April 15, 8 PM to  10:20 PM'
+const TIME2 = 'Thu, April 15, 8:50 PM to  10:50 PM'
+
 // The possible Availability responses when there is space
 const ONE_SPACE = '1 space'
 const TWO_SPACE = '2 space'
@@ -73,10 +77,6 @@ function hasCapacity(capacityString) {
 
 async function checkAndNotify() {
   try {
-    // Fetch capacity String
-    const TIME1 = 'Mon, April 5, 8 PM to  10:20 PM'
-    const TIME2 = 'Mon, April 5, 8:50 PM to  10:50 PM'
-
     const capacityString1 = await getCapacityString(TIME1)
     const capacityString2 = await getCapacityString(TIME2)
 
