@@ -18,11 +18,11 @@ let lastCheckTimestamp = moment()
 let lastCapacityString = null
 
 // Notification message to send when there's a slot
-const NOTIFY_SLOT_MESSAGE = 'CC Stadium Mon Apr 26 8pm/8:50pm has slot! https://www.climbcentral.sg/timeslot/ccsh'
+const NOTIFY_SLOT_MESSAGE = 'CC Stadium Mon May 17 8pm/8:50pm has slot! https://www.climbcentral.sg/timeslot/ccsh'
 
 // Capacity String to search for in html response
-const TIME1 = 'Mon, April 26, 8 PM to  10:20 PM'
-const TIME2 = 'Mon, April 26, 8:50 PM to  10:50 PM'
+const TIME1 = 'Mon, May 17, 8 PM to  10:20 PM'
+const TIME2 = 'Mon, May 17, 8:50 PM to  10:50 PM'
 
 // The possible Availability responses when there is space
 const ONE_SPACE = '1 space'
