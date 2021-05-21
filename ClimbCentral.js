@@ -18,11 +18,11 @@ let lastCheckTimestamp = moment()
 let lastCapacityString = null
 
 // Notification message to send when there's a slot
-const NOTIFY_SLOT_MESSAGE = 'CC Stadium Mon May 17 8pm/8:50pm has slot! https://www.climbcentral.sg/timeslot/ccsh'
+const NOTIFY_SLOT_MESSAGE = 'CC Stadium Mon May 24 9-11pm has slot! https://www.climbcentral.sg/timeslot/ccsh'
 
-// Capacity String to search for in html response
-const TIME1 = 'Mon, May 17, 8 PM to  10:20 PM'
-const TIME2 = 'Mon, May 17, 8:50 PM to  10:50 PM'
+// Capacity Strings to search for in html response
+const TIME1 = 'Mon, May 24, 9 PM to  11 PM'
+// const TIME2 = 'Mon, May 17, 8:50 PM to  10:50 PM'
 
 // The possible Availability responses when there is space
 const ONE_SPACE = '1 space'
@@ -78,14 +78,20 @@ function hasCapacity(capacityString) {
 async function checkAndNotify() {
   try {
     const capacityString1 = await getCapacityString(TIME1)
-    const capacityString2 = await getCapacityString(TIME2)
+    // const capacityString2 = await getCapacityString(TIME2)
 
-    // Notify channel if there's capacity
-    if (hasCapacity(capacityString1) || hasCapacity(capacityString2)) {
+    // Notify channel if there's capacity in single timeslot
+    if (hasCapacity(capacityString1)) {
       notifyHasSlot(NOTIFY_SLOT_MESSAGE)
     }
+    lastCapacityString = `${TIME1}: ${capacityString1}`
 
-    lastCapacityString = `${TIME1}: ${capacityString1}\n${TIME2}: ${capacityString2}`
+    // Notify channel if there's capacity in either timeslot
+    // if (hasCapacity(capacityString1) || hasCapacity(capacityString2)) {
+    //   notifyHasSlot(NOTIFY_SLOT_MESSAGE)
+    // }
+    // lastCapacityString = `${TIME1}: ${capacityString1}\n${TIME2}: ${capacityString2}`
+
     lastCheckTimestamp = moment()
   } catch (error) {
     notifyError(error)
