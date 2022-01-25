@@ -18,15 +18,17 @@ let lastCheckTimestamp = moment()
 let lastCapacityString = null
 
 // Notification message to send when there's a slot
-const NOTIFY_SLOT_MESSAGE = 'CC Stadium Mon June 14 9-11pm has slot! https://www.climbcentral.sg/timeslot/ccsh'
+const NOTIFY_SLOT_MESSAGE = 'CC Stadium Thu Jan 27 9-11pm has slot! https://www.climbcentral.sg/timeslot/ccsh-first-timer'
 
 // Capacity Strings to search for in html response
-const TIME1 = 'Mon, June 14, 9 PM to  11 PM'
+const TIME1 = 'Thu, January 27, 9 PM to  11 PM'
 // const TIME2 = 'Mon, May 17, 8:50 PM to  10:50 PM'
 
 // The possible Availability responses when there is space
 const ONE_SPACE = '1 space'
-const TWO_SPACE = '2 space'
+const TWO_SPACE = '2 spaces'
+const THREE_SPACE = '3 spaces'
+const FOUR_SPACE = '4 spaces'
 const AVAILABLE = 'Available'
 
 // Returns string between 2 strings, prefix and suffix
@@ -67,7 +69,13 @@ function getCapacityString(timeslot) {
 
 // Has 2 or more capacity
 function has2OrMoreCapacity(capacityString) {
-  return capacityString === TWO_SPACE || capacityString === AVAILABLE
+  return _.includes([
+    ONE_SPACE,
+    TWO_SPACE,
+    THREE_SPACE,
+    FOUR_SPACE
+    ], capacityString) ||
+    capacityString === AVAILABLE
 }
 
 // Has at least 1 capacity
