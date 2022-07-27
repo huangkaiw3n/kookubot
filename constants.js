@@ -19,6 +19,8 @@ const CALENDAR_DISPLAY_FORMAT = {
 
 const HTTP_PORT = process.env.PORT || 3000
 
+const abc = 'abasd'
+
 module.exports = {
   TELEGRAM_BOT_KEY,
   CHANNEL_ID,
