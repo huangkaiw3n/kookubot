@@ -1,59 +1,112 @@
+const PropertyGuru = require("./PropertyGuru");
+const { notifyNewListing, sendMessage } = require("./Telegram");
 
-const schedule = require('node-schedule')
-const http = require('http')
-const {
-  HTTP_PORT,
-} = require('./constants')
+// Search configuration
+const SEARCH_CONFIG = {
+  street: "Bishan Street 13",
+  minSize: 1300,
+};
 
-// const BoulderWorld = require('./BoulderWorld')
-const ClimbCentral = require('./ClimbCentral')
-// const Bff = require('./Bff')
+// In-memory storage of seen listing IDs (resets on each run)
+const seenListingIds = new Set();
 
-const everyMin = '*/1 * * * *'
-const every12thHour = '0 */12 * * *'
+// Helper: Sleep utility
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
-/* ============================= BFF ================================================== */
-// Run once on process start
-// Bff.checkAndNotify().then(() => Bff.heartbeat())
+// Main function
+async function run() {
+  const startTime = Date.now();
 
-// Run check schedule in 30s interval using 2 schedules, 1 delayed by 30s
-// // This is done because cron can't go sub-minute
-// schedule.scheduleJob(everyMin, Bff.checkAndNotify)
-// schedule.scheduleJob(everyMin, () => setTimeout(Bff.checkAndNotify, 3000))
+  console.log("PropertyGuru monitor started", {
+    timestamp: new Date().toISOString(),
+    searchConfig: SEARCH_CONFIG,
+  });
 
-// Set heartbeat every 12th hour
-// schedule.scheduleJob(every12thHour, Bff.heartbeat)
-/* ============================= BFF ================================================== */
+  try {
+    // Step 1: Fetch and parse listings from PropertyGuru
+    const listings = await PropertyGuru.fetchAndParseListings(SEARCH_CONFIG);
 
+    console.log(`Found ${listings.length} listings matching criteria`);
 
-/* ===================== BOULDERWORLD ================================================== */
-// Run once on process start
-// BoulderWorld.checkAndNotify().then(() => BoulderWorld.heartbeat())
+    // Step 2: Process each listing
+    let newListingsCount = 0;
 
-// Run check schedule in 30s interval using 2 schedules, 1 delayed by 30s
-// This is done because cron can't go sub-minute
-// schedule.scheduleJob(everyMin, BoulderWorld.checkAndNotify)
-// schedule.scheduleJob(everyMin, () => setTimeout(BoulderWorld.checkAndNotify, 3000))
+    for (const listing of listings) {
+      try {
+        // Check if we've seen this listing before (in this run)
+        const alreadySeen = seenListingIds.has(listing.id);
 
-// Set heartbeat every 12th hour
-// schedule.scheduleJob(every12thHour, BoulderWorld.heartbeat)
+        if (!alreadySeen) {
+          // New listing! Send notification
+          console.log("New listing found:", {
+            id: listing.id,
+            address: listing.address,
+            price: listing.price,
+            size: listing.size,
+          });
 
-/* ===================== BOULDERWORLD ================================================== */
+          await notifyNewListing(listing);
+          newListingsCount++;
 
+          // Mark as seen
+          seenListingIds.add(listing.id);
 
-/* ===================== CLIMBCENTRAL ================================================== */
+          // Wait a bit between notifications to avoid rate limits
+          if (newListingsCount < listings.length) {
+            await sleep(1000);
+          }
+        }
+      } catch (error) {
+        // Log but don't stop processing other listings
+        console.error("Error processing listing:", listing.id, error.message);
+      }
+    }
 
-ClimbCentral.checkAndNotify().then(() => ClimbCentral.heartbeat())
-schedule.scheduleJob(everyMin, ClimbCentral.checkAndNotify)
-schedule.scheduleJob(every12thHour, ClimbCentral.heartbeat)
+    // Step 3: Log completion
+    const duration = Date.now() - startTime;
+    const summary = {
+      totalListings: listings.length,
+      newListings: newListingsCount,
+      duration: `${duration}ms`,
+      timestamp: new Date().toISOString(),
+    };
 
-/* ===================== CLIMBCENTRAL ================================================== */
+    console.log("PropertyGuru monitor completed", summary);
 
+    // Send summary message
+    const summaryMessage = `
+📊 PropertyGuru Monitor Summary
 
-// Attach http port so heroku won't think web dyno failed
-http.createServer(function (request, response){
-  response.writeHead(200, {'Content-Type':'text/plain'})
-  response.end('Okay')
-}).listen(HTTP_PORT)
+📋 Listings found: ${summary.totalListings}
+🆕 New listings: ${summary.newListings}
+⏱️ Duration: ${summary.duration}
+🕐 Completed at: ${new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}
+`.trim();
 
-console.log(`Running server at port ${HTTP_PORT}`)
+    await sendMessage(summaryMessage);
+
+    return summary;
+  } catch (error) {
+    console.error("PropertyGuru monitor failed:", error);
+    throw error;
+  }
+}
+
+// Run if executed directly
+if (require.main === module) {
+  run()
+    .then((result) => {
+      console.log("\n=== Run Complete ===");
+      console.log(JSON.stringify(result, null, 2));
+      process.exit(0);
+    })
+    .catch((error) => {
+      console.error("\n=== Run Failed ===");
+      console.error(error);
+      process.exit(1);
+    });
+}
+
+module.exports = { run };
