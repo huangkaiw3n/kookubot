@@ -203,16 +203,9 @@ function parseListings(htmlString, minSize) {
 
   // Try multiple selectors for listing cards (PropertyGuru uses listing-card-v2)
   const selectors = [
-    ".listing-card-v2",
-    ".listing-card",
-    "[data-listing-id]",
-    ".property-card",
-    ".search-result-card",
-    "article[class*='listing']",
-    "article[class*='property']",
-    "div[class*='ListingCard']",
-    "[data-id]",
-    ".listing-item",
+    ".listing-card-v2", // Primary selector for PropertyGuru
+    "[da-listing-id]", // Fallback using PropertyGuru's custom attribute
+    ".listing-card", // Generic fallback
   ];
 
   let $elements = $();
