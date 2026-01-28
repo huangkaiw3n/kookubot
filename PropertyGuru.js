@@ -308,6 +308,7 @@ function buildSearchUrl(searchParams) {
     freetext: searchParams.street,
     _freetextDisplay: searchParams.street,
     minSize: searchParams.minSize,
+    page: searchParams.page || 1, // Use provided page or default to 1
   };
 
   const queryString = Object.entries(params)
@@ -317,31 +318,29 @@ function buildSearchUrl(searchParams) {
   return `${SEARCH_CONFIG.baseUrl}?${queryString}`;
 }
 
-// Extract pagination URLs from HTML
-function getPaginationUrls(htmlString) {
+// Extract total page count from HTML pagination
+function getTotalPages(htmlString) {
   const $ = cheerio.load(htmlString);
-  const pageUrls = [];
 
   // Find all page links in pagination
   const pagination = $(".hui-pagination-root");
   if (pagination.length > 0) {
+    const pageNumbers = [];
     pagination.find("a[href]").each((_, el) => {
-      const href = $(el).attr("href");
       const text = $(el).text().trim();
-
-      // Skip "Next", "Last", etc - only get numbered pages
-      if (href && /^\d+$/.test(text)) {
-        const fullUrl = href.startsWith("http")
-          ? href
-          : `https://www.propertyguru.com.sg${href}`;
-        if (!pageUrls.includes(fullUrl)) {
-          pageUrls.push(fullUrl);
-        }
+      // Only get numbered pages
+      if (/^\d+$/.test(text)) {
+        pageNumbers.push(parseInt(text));
       }
     });
+
+    // Return the highest page number found
+    if (pageNumbers.length > 0) {
+      return Math.max(...pageNumbers);
+    }
   }
 
-  return pageUrls;
+  return 1; // Default to 1 page if no pagination found
 }
 
 // Main entry point: Fetch and parse listings (with pagination)
@@ -366,25 +365,27 @@ async function fetchAndParseListings(searchParams) {
   console.log(`First page: Found ${firstPageListings.length} listings`);
 
   // Check for additional pages
-  const additionalPageUrls = getPaginationUrls(firstPageHtml);
+  const totalPages = getTotalPages(firstPageHtml);
 
-  if (additionalPageUrls.length > 0) {
-    console.log(`Found ${additionalPageUrls.length} additional pages to fetch`);
+  if (totalPages > 1) {
+    console.log(`Found ${totalPages} total pages to fetch`);
 
-    for (let i = 0; i < additionalPageUrls.length; i++) {
-      const pageUrl = additionalPageUrls[i];
-      console.log(`Fetching page ${i + 2}/${additionalPageUrls.length + 1}...`);
+    // Fetch pages 2 through totalPages
+    for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
+      console.log(`Fetching page ${pageNum}/${totalPages}...`);
 
       try {
+        // Build URL with incremented page number
+        const pageUrl = buildSearchUrl({ ...searchParams, page: pageNum });
         const pageHtml = await fetchPropertyGuruHTML(pageUrl);
         const pageListings = parseListings(pageHtml, searchParams.minSize);
         allListings.push(...pageListings);
-        console.log(`  Page ${i + 2}: Found ${pageListings.length} listings`);
+        console.log(`  Page ${pageNum}: Found ${pageListings.length} listings`);
 
         // Small delay between pages to be polite
         await sleep(2000);
       } catch (error) {
-        console.error(`Error fetching page ${i + 2}:`, error.message);
+        console.error(`Error fetching page ${pageNum}:`, error.message);
       }
     }
   } else {
@@ -402,5 +403,5 @@ module.exports = {
   fetchPropertyGuruHTML,
   parseListings,
   buildSearchUrl,
-  getPaginationUrls,
+  getTotalPages,
 };
