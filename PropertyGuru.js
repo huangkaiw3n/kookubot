@@ -108,15 +108,12 @@ async function fetchPropertyGuruHTML(url, maxRetries = 3) {
         throw new Error(`Unexpected status code: ${response.status()}`);
       }
 
-      // Wait for listings to load (try multiple selectors)
+      // Wait for listings to load (use correct PropertyGuru selectors)
       console.log("Waiting for listings to load...");
       try {
-        await page.waitForSelector(
-          "[data-listing-id], .listing-card, article",
-          {
-            timeout: 10000,
-          },
-        );
+        await page.waitForSelector(".listing-card-v2, [da-listing-id]", {
+          timeout: 10000,
+        });
         console.log("Listings loaded!");
       } catch (err) {
         console.warn("Could not find listings selector, proceeding anyway...");
