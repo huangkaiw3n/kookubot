@@ -131,7 +131,10 @@ async function run() {
 🕐 Completed at: ${new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}
 `.trim();
 
-    await sendMessage(summaryMessage);
+    // Disable notification when number of new listings are 0
+    await sendMessage(summaryMessage, {
+      disable_notification: summary.newListings === 0,
+    });
 
     return summary;
   } catch (error) {
