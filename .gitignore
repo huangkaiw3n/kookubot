@@ -2,4 +2,3 @@ node_modules
 *.env
 cookies.json
 debug_response.html
-seen_listings.json

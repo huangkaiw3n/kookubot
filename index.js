@@ -10,6 +10,17 @@ const SEARCH_CONFIG = {
   minSize: 1300,
 };
 
+// Schedule configuration (cron format: minute hour day month dayOfWeek)
+// Note: Times are in server local time (GMT+8 / Singapore time)
+// Examples:
+//   "*/5 * * * *"    - Every 5 minutes
+//   "*/10 * * * *"   - Every 10 minutes
+//   "0 * * * *"      - Every hour
+//   "0 9-21 * * *"   - Every hour from 9am to 9pm SGT
+//   "*/15 9-21 * * *" - Every 15 minutes from 9am to 9pm SGT
+//   "0 9,12,15,18,21 * * *" - At 9am, 12pm, 3pm, 6pm, 9pm SGT
+const SCHEDULE_PATTERN = "0 9,12,15,18,21 * * *";
+
 // File to persist seen listing IDs
 const SEEN_LISTINGS_FILE = path.join(__dirname, "seen_listings.json");
 
@@ -142,8 +153,8 @@ function startScheduler() {
     console.error("Initial run failed:", error);
   });
 
-  // Schedule to run every 5 minutes
-  const job = schedule.scheduleJob("*/5 * * * *", async () => {
+  // Schedule to run based on configured pattern
+  const job = schedule.scheduleJob(SCHEDULE_PATTERN, async () => {
     console.log("\n=== Scheduled run triggered ===");
     try {
       await run();
@@ -158,7 +169,7 @@ function startScheduler() {
     }
   });
 
-  console.log("Scheduler started - running every 5 minutes");
+  console.log(`Scheduler started - pattern: ${SCHEDULE_PATTERN}`);
   console.log("Press Ctrl+C to stop");
 
   // Handle graceful shutdown
