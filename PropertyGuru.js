@@ -164,58 +164,25 @@ async function fetchPropertyGuruHTML(url, maxRetries = 3) {
   }
 }
 
-// Extract listing data from cheerio element
+// Extract listing data from cheerio element (simplified based on actual HTML structure)
 function extractListingData($element, $) {
-  // Try multiple selectors for listing ID (PropertyGuru specific + fallbacks)
+  // PropertyGuru uses da-listing-id attribute
   const listingId = $element.attr("da-listing-id");
 
-  // Extract address - PropertyGuru uses .listing-address
-  const address =
-    $element.find(".listing-address").first().text().trim() ||
-    $element.find(".property-address").first().text().trim() ||
-    $element.find("h3 a").first().text().trim() ||
-    $element.find("a[itemprop='name']").first().text().trim() ||
-    $element.find(".nav-link").first().text().trim() ||
-    $element.find("h3").first().text().trim() ||
-    $element.find("a").first().attr("title") ||
-    $element.find("a").first().text().trim();
+  // Address is in .listing-address
+  const address = $element.find(".listing-address").first().text().trim();
 
-  // Extract price - PropertyGuru uses .listing-price
-  const priceText =
-    $element.find(".listing-price").first().text().trim() ||
-    $element.find(".price").first().text().trim() ||
-    $element.find(".list-price").first().text().trim() ||
-    $element.find("[itemprop='price']").first().text().trim() ||
-    $element.find("span[class*='price']").first().text().trim();
-
-  // Parse price: "S$ 1,200,000" or "$1200000" -> 1200000
+  // Price is in .listing-price (format: "S$ 949,000")
+  const priceText = $element.find(".listing-price").first().text().trim();
   const price = priceText ? priceText.replace(/[^0-9]/g, "") : null;
 
-  // Extract size - PropertyGuru has size in feature group
-  // Get all text from the element and search for sqft pattern
-  const elementText = $element.text();
-  const sizeText =
-    $element.find(".listing-floorarea").first().text().trim() ||
-    $element.find("[itemprop='floorSize']").first().text().trim() ||
-    $element.find(".property-size").first().text().trim() ||
-    $element.find("span[class*='size']").first().text().trim() ||
-    $element.find(".listing-feature-group").text() ||
-    elementText;
-
-  // Parse size: "1,500 sqft" or "1500 sqft" -> 1500
-  const sizeMatch = sizeText.match(
-    /(\d{1,3}(?:,\d{3})*)\s*(?:sqft|sq\.?\s*ft)/i,
-  );
+  // Size is in .listing-feature-group text (format: "321,302 sqftHDB Flat...")
+  const featuresText = $element.find(".listing-feature-group").text();
+  const sizeMatch = featuresText.match(/(\d{1,3}(?:,\d{3})*)\s*sqft/i);
   const size = sizeMatch ? parseInt(sizeMatch[1].replace(/,/g, "")) : null;
 
-  // Extract URL - try multiple selectors
-  const relativeUrl = $element.find(".card-footer").first().attr("href");
-
-  const url = relativeUrl
-    ? relativeUrl.startsWith("http")
-      ? relativeUrl
-      : `https://www.propertyguru.com.sg${relativeUrl}`
-    : null;
+  // URL is in .card-footer anchor element
+  const url = $element.find(".card-footer").first().attr("href");
 
   return {
     id: listingId,
@@ -347,24 +314,84 @@ function buildSearchUrl(searchParams) {
   return `${SEARCH_CONFIG.baseUrl}?${queryString}`;
 }
 
-// Main entry point: Fetch and parse listings
+// Extract pagination URLs from HTML
+function getPaginationUrls(htmlString) {
+  const $ = cheerio.load(htmlString);
+  const pageUrls = [];
+
+  // Find all page links in pagination
+  const pagination = $(".hui-pagination-root");
+  if (pagination.length > 0) {
+    pagination.find("a[href]").each((_, el) => {
+      const href = $(el).attr("href");
+      const text = $(el).text().trim();
+
+      // Skip "Next", "Last", etc - only get numbered pages
+      if (href && /^\d+$/.test(text)) {
+        const fullUrl = href.startsWith("http")
+          ? href
+          : `https://www.propertyguru.com.sg${href}`;
+        if (!pageUrls.includes(fullUrl)) {
+          pageUrls.push(fullUrl);
+        }
+      }
+    });
+  }
+
+  return pageUrls;
+}
+
+// Main entry point: Fetch and parse listings (with pagination)
 async function fetchAndParseListings(searchParams) {
   console.log(
     "Starting PropertyGuru listing fetch with Puppeteer...",
     searchParams,
   );
 
-  // Build URL
-  const url = buildSearchUrl(searchParams);
+  const allListings = [];
 
-  // Fetch HTML using Puppeteer
-  const htmlString = await fetchPropertyGuruHTML(url);
+  // Build URL for first page
+  const firstPageUrl = buildSearchUrl(searchParams);
 
-  // Parse listings
-  const listings = parseListings(htmlString, searchParams.minSize);
+  // Fetch first page
+  const firstPageHtml = await fetchPropertyGuruHTML(firstPageUrl);
 
-  console.log(`Fetch complete: Found ${listings.length} listings`);
-  return listings;
+  // Parse first page listings
+  const firstPageListings = parseListings(firstPageHtml, searchParams.minSize);
+  allListings.push(...firstPageListings);
+
+  console.log(`First page: Found ${firstPageListings.length} listings`);
+
+  // Check for additional pages
+  const additionalPageUrls = getPaginationUrls(firstPageHtml);
+
+  if (additionalPageUrls.length > 0) {
+    console.log(`Found ${additionalPageUrls.length} additional pages to fetch`);
+
+    for (let i = 0; i < additionalPageUrls.length; i++) {
+      const pageUrl = additionalPageUrls[i];
+      console.log(`Fetching page ${i + 2}/${additionalPageUrls.length + 1}...`);
+
+      try {
+        const pageHtml = await fetchPropertyGuruHTML(pageUrl);
+        const pageListings = parseListings(pageHtml, searchParams.minSize);
+        allListings.push(...pageListings);
+        console.log(`  Page ${i + 2}: Found ${pageListings.length} listings`);
+
+        // Small delay between pages to be polite
+        await sleep(2000);
+      } catch (error) {
+        console.error(`Error fetching page ${i + 2}:`, error.message);
+      }
+    }
+  } else {
+    console.log("No additional pages found");
+  }
+
+  console.log(
+    `Fetch complete: Found ${allListings.length} total listings across all pages`,
+  );
+  return allListings;
 }
 
 module.exports = {
@@ -372,4 +399,5 @@ module.exports = {
   fetchPropertyGuruHTML,
   parseListings,
   buildSearchUrl,
+  getPaginationUrls,
 };
