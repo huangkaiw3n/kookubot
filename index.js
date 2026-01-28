@@ -1,5 +1,8 @@
 const PropertyGuru = require("./PropertyGuru");
 const { notifyNewListing, sendMessage } = require("./Telegram");
+const schedule = require("node-schedule");
+const fs = require("fs");
+const path = require("path");
 
 // Search configuration
 const SEARCH_CONFIG = {
@@ -7,8 +10,37 @@ const SEARCH_CONFIG = {
   minSize: 1300,
 };
 
-// In-memory storage of seen listing IDs (resets on each run)
-const seenListingIds = new Set();
+// File to persist seen listing IDs
+const SEEN_LISTINGS_FILE = path.join(__dirname, "seen_listings.json");
+
+// In-memory storage of seen listing IDs
+let seenListingIds = new Set();
+
+// Load seen listings from file
+function loadSeenListings() {
+  try {
+    if (fs.existsSync(SEEN_LISTINGS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(SEEN_LISTINGS_FILE, "utf8"));
+      seenListingIds = new Set(data);
+      console.log(`Loaded ${seenListingIds.size} seen listings from file`);
+    }
+  } catch (error) {
+    console.warn("Failed to load seen listings:", error.message);
+  }
+}
+
+// Save seen listings to file
+function saveSeenListings() {
+  try {
+    fs.writeFileSync(
+      SEEN_LISTINGS_FILE,
+      JSON.stringify(Array.from(seenListingIds), null, 2),
+    );
+    console.log(`Saved ${seenListingIds.size} seen listings to file`);
+  } catch (error) {
+    console.error("Failed to save seen listings:", error.message);
+  }
+}
 
 // Helper: Sleep utility
 function sleep(ms) {
@@ -35,7 +67,7 @@ async function run() {
 
     for (const listing of listings) {
       try {
-        // Check if we've seen this listing before (in this run)
+        // Check if we've seen this listing before
         const alreadySeen = seenListingIds.has(listing.id);
 
         if (!alreadySeen) {
@@ -63,6 +95,9 @@ async function run() {
         console.error("Error processing listing:", listing.id, error.message);
       }
     }
+
+    // Save seen listings to file after processing
+    saveSeenListings();
 
     // Step 3: Log completion
     const duration = Date.now() - startTime;
@@ -94,19 +129,57 @@ async function run() {
   }
 }
 
-// Run if executed directly
-if (require.main === module) {
-  run()
-    .then((result) => {
-      console.log("\n=== Run Complete ===");
-      console.log(JSON.stringify(result, null, 2));
-      process.exit(0);
-    })
-    .catch((error) => {
-      console.error("\n=== Run Failed ===");
-      console.error(error);
-      process.exit(1);
-    });
+// Start the scheduler
+function startScheduler() {
+  console.log("Starting PropertyGuru monitor scheduler...");
+
+  // Load seen listings from file
+  loadSeenListings();
+
+  // Run immediately on startup
+  console.log("Running initial check...");
+  run().catch((error) => {
+    console.error("Initial run failed:", error);
+  });
+
+  // Schedule to run every 5 minutes
+  const job = schedule.scheduleJob("*/5 * * * *", async () => {
+    console.log("\n=== Scheduled run triggered ===");
+    try {
+      await run();
+    } catch (error) {
+      console.error("Scheduled run failed:", error);
+      // Send error notification
+      try {
+        await sendMessage(`❌ PropertyGuru monitor error:\n${error.message}`);
+      } catch (notifyError) {
+        console.error("Failed to send error notification:", notifyError);
+      }
+    }
+  });
+
+  console.log("Scheduler started - running every 5 minutes");
+  console.log("Press Ctrl+C to stop");
+
+  // Handle graceful shutdown
+  process.on("SIGINT", () => {
+    console.log("\nShutting down gracefully...");
+    saveSeenListings();
+    job.cancel();
+    process.exit(0);
+  });
+
+  process.on("SIGTERM", () => {
+    console.log("\nShutting down gracefully...");
+    saveSeenListings();
+    job.cancel();
+    process.exit(0);
+  });
 }
 
-module.exports = { run };
+// Run if executed directly
+if (require.main === module) {
+  startScheduler();
+}
+
+module.exports = { run, startScheduler };

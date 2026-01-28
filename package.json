@@ -1,7 +1,7 @@
 {
   "name": "koo_kubot",
   "version": "2.0.0",
-  "description": "PropertyGuru property listing monitor for AWS Lambda",
+  "description": "PropertyGuru property listing monitor running on home server",
   "main": "index.js",
   "scripts": {
     "test": "node index.js",
@@ -16,6 +16,7 @@
     "axios": "^1.13.3",
     "cheerio": "^1.0.0-rc.12",
     "got": "^11.8.6",
+    "node-schedule": "^2.1.1",
     "puppeteer": "^24.36.0",
     "serialize-error": "^8.1.0"
   }
