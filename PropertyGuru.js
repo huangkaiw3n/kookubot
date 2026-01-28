@@ -176,10 +176,13 @@ function extractListingData($element, $) {
   const priceText = $element.find(".listing-price").first().text().trim();
   const price = priceText ? priceText.replace(/[^0-9]/g, "") : null;
 
-  // Size is in .listing-feature-group text (format: "321,302 sqftHDB Flat...")
-  const featuresText = $element.find(".listing-feature-group").text();
-  const sizeMatch = featuresText.match(/(\d{1,3}(?:,\d{3})*)\s*sqft/i);
-  const size = sizeMatch ? parseInt(sizeMatch[1].replace(/,/g, "")) : null;
+  // Size is in div[da-id="listing-card-v2-area"] > p (format: "1,302 sqft")
+  const areaText = $element
+    .find('[da-id="listing-card-v2-area"] p')
+    .first()
+    .text()
+    .trim();
+  const size = areaText ? parseInt(areaText.replace(/\D/g, "")) : null;
 
   // URL is in .card-footer anchor element
   const url = $element.find(".card-footer").first().attr("href");
