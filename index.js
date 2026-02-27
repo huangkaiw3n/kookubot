@@ -122,14 +122,16 @@ async function run() {
     console.log("PropertyGuru monitor completed", summary);
 
     // Send summary message
-    const summaryMessage = `
-📊 PropertyGuru Monitor Summary
-
-📋 Listings found: ${summary.totalListings}
-🆕 New listings: ${summary.newListings}
-⏱️ Duration: ${summary.duration}
-🕐 Completed at: ${new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}
-`.trim();
+    const summaryMessage =
+      summary.newListings === 0
+        ? `No new listings (${summary.totalListings} total)`
+        : `
+        📊 PropertyGuru Monitor Summary
+        📋 Listings found: ${summary.totalListings}
+        🆕 New listings: ${summary.newListings}
+        ⏱️ Duration: ${summary.duration}
+        🕐 Completed at: ${new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}
+        `.trim();
 
     // Disable notification when number of new listings are 0
     await sendMessage(summaryMessage, {
