@@ -2,6 +2,7 @@ const puppeteer = require("puppeteer");
 const cheerio = require("cheerio");
 const fs = require("fs");
 const path = require("path");
+const { USER_AGENT, VIEWPORT, CF_COOKIE_ATTRS, BASE_HEADERS, BROWSER_ARGS, IGNORED_DEFAULT_ARGS } = require("./browser.config");
 
 // Search configuration
 const SEARCH_CONFIG = {
@@ -15,23 +16,22 @@ const SEARCH_CONFIG = {
 
 const blockRegex = /\b16[0-6]\b/;
 
+// Set to "1" to save debug_response.html after each successful page fetch
+const SAVE_DEBUG_HTML = process.env.DEBUG_HTML === "1";
+
 // Try to load cookies from cookies.json for Puppeteer
 let browserCookies = [];
 try {
-  const cookiesPath = path.join(__dirname, "cookies.json");
-  if (fs.existsSync(cookiesPath)) {
-    const cookieData = JSON.parse(fs.readFileSync(cookiesPath, "utf8"));
-    // Convert to Puppeteer cookie format
-    browserCookies = Object.entries(cookieData).map(([name, value]) => ({
-      name,
-      value,
-      domain: ".propertyguru.com.sg",
-      path: "/",
-      httpOnly: false,
-      secure: true,
-    }));
-    console.log("Loaded cookies for Puppeteer:", Object.keys(cookieData));
-  }
+  const cookieData = JSON.parse(fs.readFileSync(path.join(__dirname, "cookies.json"), "utf8"));
+  browserCookies = Object.entries(cookieData).map(([name, value]) => ({
+    name,
+    value,
+    domain: ".propertyguru.com.sg",
+    path: "/",
+    secure: true,
+    ...CF_COOKIE_ATTRS[name],
+  }));
+  console.log("Loaded cookies for Puppeteer:", Object.keys(cookieData));
 } catch (error) {
   console.warn("Failed to load cookies.json:", error.message);
 }
@@ -41,116 +41,100 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Fetch PropertyGuru HTML using Puppeteer
-async function fetchPropertyGuruHTML(url, maxRetries = 3) {
-  let browser;
+// Launch a Puppeteer browser with standard args
+async function launchBrowser() {
+  return puppeteer.launch({
+    headless: true,
+    args: BROWSER_ARGS,
+    ignoreDefaultArgs: IGNORED_DEFAULT_ARGS,
+  });
+}
 
+// Create and configure a new page in an existing browser
+async function setupPage(browser) {
+  const page = await browser.newPage();
+  await page.setViewport(VIEWPORT);
+  await page.setUserAgent(USER_AGENT);
+  await page.setExtraHTTPHeaders(BASE_HEADERS);
+
+  // Method 1: Patch JS properties that Cloudflare checks before any page load
+  await page.evaluateOnNewDocument(() => {
+    // Hide webdriver flag
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+
+    // Spoof plugins (headless Chrome has none)
+    Object.defineProperty(navigator, "plugins", {
+      get: () => [1, 2, 3, 4, 5],
+    });
+
+    // Spoof languages
+    Object.defineProperty(navigator, "languages", {
+      get: () => ["en-GB", "en-US", "en"],
+    });
+
+    // Add chrome object (missing in headless)
+    globalThis.chrome = { runtime: {} };
+
+    // Spoof permission query to avoid bot detection
+    const originalQuery = globalThis.navigator.permissions.query;
+    globalThis.navigator.permissions.query = (parameters) =>
+      parameters.name === "notifications"
+        ? Promise.resolve({ state: Notification.permission })
+        : originalQuery(parameters);
+  });
+
+  if (browserCookies.length > 0) {
+    await page.setCookie(...browserCookies);
+    console.log("Set cookies in Puppeteer");
+  }
+  return page;
+}
+
+// Navigate an existing page to a URL and return its HTML
+async function navigateAndGetHTML(page, url, maxRetries = 3) {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      if (attempt > 0) {
-        const randomDelay = 1000 + Math.random() * 2000;
-        await sleep(randomDelay);
-      }
+      console.log(`Navigating (attempt ${attempt + 1}/${maxRetries}):`, url);
 
-      console.log(
-        `Fetching PropertyGuru with Puppeteer (attempt ${attempt + 1}/${maxRetries}):`,
-        url,
-      );
-
-      // Launch browser
-      browser = await puppeteer.launch({
-        headless: true,
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-accelerated-2d-canvas",
-          "--disable-gpu",
-        ],
-      });
-
-      const page = await browser.newPage();
-
-      // Set viewport
-      await page.setViewport({ width: 1920, height: 1080 });
-
-      // Set user agent
-      await page.setUserAgent(
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
-      );
-
-      // Set cookies if available
-      if (browserCookies.length > 0) {
-        await page.setCookie(...browserCookies);
-        console.log("Set cookies in Puppeteer");
-      }
-
-      // Navigate to page
-      console.log("Navigating to page...");
+      // Use domcontentloaded so we return quickly and don't block on
+      // Cloudflare challenge network activity (which causes networkidle2 to timeout)
       const response = await page.goto(url, {
-        waitUntil: "networkidle2", // Wait until network is idle
+        waitUntil: "domcontentloaded",
         timeout: 30000,
       });
 
       console.log(`Response status: ${response.status()}`);
 
-      if (response.status() === 403) {
-        console.warn("Cloudflare blocked request");
-        await browser.close();
-        if (attempt < maxRetries - 1) {
-          continue;
-        }
-        throw new Error("Cloudflare blocked request after all retries");
-      }
+      // Don't bail on 403 — Cloudflare's JS challenge may still run and load
+      // the real page content. Wait for the listing selector to confirm.
+      console.log(
+        response.status() === 403
+          ? "Cloudflare challenge detected, waiting up to 60s for it to resolve..."
+          : "Waiting for listings to load...",
+      );
+      await page.waitForSelector(".listing-card-v2, [da-listing-id]", {
+        timeout: 60000,
+      });
+      console.log("Listings loaded!");
 
-      if (response.status() !== 200) {
-        await browser.close();
-        throw new Error(`Unexpected status code: ${response.status()}`);
-      }
-
-      // Wait for listings to load (use correct PropertyGuru selectors)
-      console.log("Waiting for listings to load...");
-      try {
-        await page.waitForSelector(".listing-card-v2, [da-listing-id]", {
-          timeout: 10000,
-        });
-        console.log("Listings loaded!");
-      } catch (err) {
-        console.warn("Could not find listings selector, proceeding anyway...");
-      }
-
-      // Get HTML content
       const htmlContent = await page.content();
       console.log(`Successfully fetched HTML (${htmlContent.length} bytes)`);
 
-      // Save HTML for debugging
-      try {
-        const debugPath = path.join(__dirname, "debug_response.html");
-        fs.writeFileSync(debugPath, htmlContent);
-        console.log(`Saved HTML to debug_response.html`);
-      } catch (err) {
-        console.warn("Could not save debug HTML:", err.message);
-      }
-
-      await browser.close();
-      return htmlContent;
-    } catch (error) {
-      if (browser) {
+      if (SAVE_DEBUG_HTML) {
         try {
-          await browser.close();
-        } catch (closeErr) {
-          // Ignore close errors
+          fs.writeFileSync(path.join(__dirname, "debug_response.html"), htmlContent);
+          console.log("Saved HTML to debug_response.html");
+        } catch (err) {
+          console.warn("Could not save debug HTML:", err.message);
         }
       }
 
+      return htmlContent;
+    } catch (error) {
       if (attempt === maxRetries - 1) {
-        console.error(
-          "Failed to fetch PropertyGuru after all retries:",
-          error.message,
-        );
+        console.error("Failed to fetch after all retries:", error.message);
         throw error;
       }
-
       const backoffMs = 2000 * (attempt + 1);
       console.log(
         `Error occurred, retrying in ${backoffMs}ms...`,
@@ -158,6 +142,18 @@ async function fetchPropertyGuruHTML(url, maxRetries = 3) {
       );
       await sleep(backoffMs);
     }
+  }
+}
+
+// Fetch PropertyGuru HTML using Puppeteer (standalone — creates its own browser)
+async function fetchPropertyGuruHTML(url, maxRetries = 3) {
+  let browser;
+  try {
+    browser = await launchBrowser();
+    const page = await setupPage(browser);
+    return await navigateAndGetHTML(page, url, maxRetries);
+  } finally {
+    if (browser) await browser.close().catch(() => {});
   }
 }
 
@@ -343,43 +339,60 @@ async function fetchAndParseListings(searchParams) {
   const allListings = [];
 
   // Build URL for first page
-  const firstPageUrl = buildSearchUrl(searchParams);
+  let browser;
+  try {
+    browser = await launchBrowser();
+    const page = await setupPage(browser);
 
-  // Fetch first page
-  const firstPageHtml = await fetchPropertyGuruHTML(firstPageUrl);
+    // Fetch first page
+    const firstPageUrl = buildSearchUrl(searchParams);
+    const firstPageHtml = await navigateAndGetHTML(page, firstPageUrl);
+    const firstPageListings = parseListings(
+      firstPageHtml,
+      searchParams.minSize,
+    );
+    allListings.push(...firstPageListings);
+    console.log(`First page: Found ${firstPageListings.length} listings`);
 
-  // Parse first page listings
-  const firstPageListings = parseListings(firstPageHtml, searchParams.minSize);
-  allListings.push(...firstPageListings);
+    // Check for additional pages
+    const totalPages = getTotalPages(firstPageHtml);
 
-  console.log(`First page: Found ${firstPageListings.length} listings`);
+    if (totalPages > 1) {
+      console.log(`Found ${totalPages} total pages to fetch`);
 
-  // Check for additional pages
-  const totalPages = getTotalPages(firstPageHtml);
+      let prevUrl = firstPageUrl;
+      for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
+        console.log(`Fetching page ${pageNum}/${totalPages}...`);
+        try {
+          const pageUrl = buildSearchUrl({ ...searchParams, page: pageNum });
 
-  if (totalPages > 1) {
-    console.log(`Found ${totalPages} total pages to fetch`);
+          // Set Referer to the previous page before navigating
+          await page.setExtraHTTPHeaders({ ...BASE_HEADERS, Referer: prevUrl });
 
-    // Fetch pages 2 through totalPages
-    for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
-      console.log(`Fetching page ${pageNum}/${totalPages}...`);
+          // Simulate human reading the page before clicking next
+          const readDelay = 3000 + Math.random() * 3000;
+          await sleep(readDelay);
 
-      try {
-        // Build URL with incremented page number
-        const pageUrl = buildSearchUrl({ ...searchParams, page: pageNum });
-        const pageHtml = await fetchPropertyGuruHTML(pageUrl);
-        const pageListings = parseListings(pageHtml, searchParams.minSize);
-        allListings.push(...pageListings);
-        console.log(`  Page ${pageNum}: Found ${pageListings.length} listings`);
+          // Scroll to bottom (where pagination lives) like a real user
+          await page.evaluate(() =>
+            globalThis.scrollTo(0, document.body.scrollHeight),
+          );
+          await sleep(500 + Math.random() * 500);
 
-        // Small delay between pages to be polite
-        await sleep(2000);
-      } catch (error) {
-        console.error(`Error fetching page ${pageNum}:`, error.message);
+          const pageHtml = await navigateAndGetHTML(page, pageUrl);
+          const pageListings = parseListings(pageHtml, searchParams.minSize);
+          allListings.push(...pageListings);
+          console.log(`  Page ${pageNum}: Found ${pageListings.length} listings`);
+          prevUrl = pageUrl;
+        } catch (error) {
+          console.error(`Error fetching page ${pageNum}:`, error.message);
+        }
       }
+    } else {
+      console.log("No additional pages found");
     }
-  } else {
-    console.log("No additional pages found");
+  } finally {
+    if (browser) await browser.close().catch(() => {});
   }
 
   console.log(
