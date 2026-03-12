@@ -14,6 +14,7 @@ function sendMessage(message, options = {}) {
   // In dev mode, just log it instead of sending
   if (process.env.env === "dev") {
     console.log(payload);
+    return;
   }
 
   return axios.post(
