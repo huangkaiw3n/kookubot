@@ -21,7 +21,8 @@ const SEARCH_CONFIG = {
   },
 };
 
-const blockRegex = /\b16[0-6]\b/;
+// Block filter configuration - Fill this to whatever you need
+const BLOCK_REGEX = /\b(158|16[0-6])\b/;
 
 // Set to "1" to save debug_response.html after each successful page fetch
 const SAVE_DEBUG_HTML = process.env.DEBUG_HTML === "1";
@@ -279,9 +280,9 @@ function parseListings(htmlString, minSize) {
       }
 
       // If address found and not address range of interest, skip it
-      if (listing.address && !blockRegex.test(listing.address)) {
+      if (listing.address && !BLOCK_REGEX.test(listing.address)) {
         console.log(
-          `Skipping listing ${listing.id}: Address ${listing.address} NOT 160-166`,
+          `Skipping listing ${listing.id}: Address ${listing.address} NOT in search range`,
         );
         return;
       }
