@@ -3,9 +3,7 @@ const cheerio = require("cheerio");
 const fs = require("fs");
 const path = require("path");
 const {
-  USER_AGENT,
   VIEWPORT,
-  CF_COOKIE_ATTRS,
   BASE_HEADERS,
   BROWSER_ARGS,
   IGNORED_DEFAULT_ARGS,
@@ -27,25 +25,6 @@ const BLOCK_REGEX = /\b(158|16[0-6])\b/;
 // Set to "1" to save debug_response.html after each successful page fetch
 const SAVE_DEBUG_HTML = process.env.DEBUG_HTML === "1";
 
-// Try to load cookies from cookies.json for Puppeteer
-let browserCookies = [];
-try {
-  const cookieData = JSON.parse(
-    fs.readFileSync(path.join(__dirname, "cookies.json"), "utf8"),
-  );
-  browserCookies = Object.entries(cookieData).map(([name, value]) => ({
-    name,
-    value,
-    domain: ".propertyguru.com.sg",
-    path: "/",
-    secure: true,
-    ...CF_COOKIE_ATTRS[name],
-  }));
-  console.log("Loaded cookies for Puppeteer:", Object.keys(cookieData));
-} catch (error) {
-  console.warn("Failed to load cookies.json:", error.message);
-}
-
 // Sleep utility
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -64,7 +43,13 @@ async function launchBrowser() {
 async function setupPage(browser) {
   const page = await browser.newPage();
   await page.setViewport(VIEWPORT);
-  await page.setUserAgent(USER_AGENT);
+
+  // Derive UA from the bundled Chromium so it always matches the real browser,
+  // but strip the "HeadlessChrome" marker that Cloudflare flags.
+  const defaultUA = await browser.userAgent();
+  const cleanUA = defaultUA.replace("HeadlessChrome", "Chrome");
+  await page.setUserAgent(cleanUA);
+
   await page.setExtraHTTPHeaders(BASE_HEADERS);
 
   // Method 1: Patch JS properties that Cloudflare checks before any page load
@@ -93,11 +78,75 @@ async function setupPage(browser) {
         : originalQuery(parameters);
   });
 
-  if (browserCookies.length > 0) {
-    await page.setCookie(...browserCookies);
-    console.log("Set cookies in Puppeteer");
-  }
   return page;
+}
+
+// Navigate to the target URL, let Cloudflare's JS challenge run, and return
+// the page HTML if listings are already present (avoids a redundant reload).
+// Returns null if the page didn't load usable content.
+async function navigateWithChallenge(page, targetUrl) {
+  console.log(`Navigating (with CF challenge handling): ${targetUrl}`);
+
+  try {
+    const response = await page.goto(targetUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    console.log(`Response status: ${response.status()}`);
+
+    // If we got a challenge (403), poll for cf_clearance then wait for
+    // the page to auto-refresh with real content.
+    if (response.status() === 403) {
+      console.log("Cloudflare challenge detected, waiting for it to resolve...");
+
+      const maxWaitMs = 30000;
+      const pollMs = 2000;
+      let elapsed = 0;
+
+      while (elapsed < maxWaitMs) {
+        const cookies = await page.cookies();
+        if (cookies.some((c) => c.name === "cf_clearance")) {
+          console.log(`cf_clearance obtained after ${elapsed / 1000}s`);
+          break;
+        }
+        await sleep(pollMs);
+        elapsed += pollMs;
+        console.log(`Waiting for cf_clearance... (${elapsed / 1000}s)`);
+      }
+    }
+
+    // Wait for listings to appear (challenge pages auto-redirect once solved)
+    await page.waitForSelector(".listing-card-v2, [da-listing-id]", {
+      timeout: 20000,
+    });
+    console.log("Listings loaded!");
+
+    // Set Referer for subsequent navigations
+    await page.setExtraHTTPHeaders({
+      ...BASE_HEADERS,
+      Referer: targetUrl,
+    });
+
+    const htmlContent = await page.content();
+    console.log(`Successfully fetched HTML (${htmlContent.length} bytes)`);
+
+    if (SAVE_DEBUG_HTML) {
+      try {
+        fs.writeFileSync(
+          path.join(__dirname, "debug_response.html"),
+          htmlContent,
+        );
+        console.log("Saved HTML to debug_response.html");
+      } catch (err) {
+        console.warn("Could not save debug HTML:", err.message);
+      }
+    }
+
+    return htmlContent;
+  } catch (error) {
+    console.warn("navigateWithChallenge failed:", error.message);
+    return null;
+  }
 }
 
 // Navigate an existing page to a URL and return its HTML
@@ -164,7 +213,8 @@ async function fetchPropertyGuruHTML(url, maxRetries = 3) {
   try {
     browser = await launchBrowser();
     const page = await setupPage(browser);
-    return await navigateAndGetHTML(page, url, maxRetries);
+    return await navigateWithChallenge(page, url)
+      || await navigateAndGetHTML(page, url, maxRetries);
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
@@ -357,9 +407,11 @@ async function fetchAndParseListings(searchParams) {
     browser = await launchBrowser();
     const page = await setupPage(browser);
 
-    // Fetch first page
+    // Fetch first page — navigateWithChallenge handles the CF challenge
+    // and returns HTML directly without a redundant second navigation.
     const firstPageUrl = buildSearchUrl(searchParams);
-    const firstPageHtml = await navigateAndGetHTML(page, firstPageUrl);
+    const firstPageHtml = await navigateWithChallenge(page, firstPageUrl)
+      || await navigateAndGetHTML(page, firstPageUrl);
     const firstPageListings = parseListings(
       firstPageHtml,
       searchParams.minSize,
@@ -373,32 +425,55 @@ async function fetchAndParseListings(searchParams) {
     if (totalPages > 1) {
       console.log(`Found ${totalPages} total pages to fetch`);
 
-      let prevUrl = firstPageUrl;
       for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
         console.log(`Fetching page ${pageNum}/${totalPages}...`);
         try {
-          const pageUrl = buildSearchUrl({ ...searchParams, page: pageNum });
-
-          // Set Referer to the previous page before navigating
-          await page.setExtraHTTPHeaders({ ...BASE_HEADERS, Referer: prevUrl });
-
           // Simulate human reading the page before clicking next
           const readDelay = 3000 + Math.random() * 3000;
           await sleep(readDelay);
 
-          // Scroll to bottom (where pagination lives) like a real user
+          // Scroll to bottom where pagination lives
           await page.evaluate(() =>
             globalThis.scrollTo(0, document.body.scrollHeight),
           );
           await sleep(500 + Math.random() * 500);
 
-          const pageHtml = await navigateAndGetHTML(page, pageUrl);
+          // Click the pagination link instead of page.goto() — this produces
+          // a natural navigation that Cloudflare won't challenge.
+          // PropertyGuru uses da-id attributes for pagination buttons.
+          const nextPageLink = await page.$(
+            `[da-id="hui-pagination-btn-page-${pageNum}"]`,
+          );
+
+          if (!nextPageLink) {
+            console.warn(`No pagination link found for page ${pageNum}, stopping`);
+            break;
+          }
+
+          // Pagination may be SPA (JS-driven) or a full navigation.
+          // Listen for both: a network navigation OR new listing content.
+          const navigationPromise = page.waitForNavigation({
+            waitUntil: "domcontentloaded",
+            timeout: 15000,
+          }).catch(() => null); // SPA won't trigger navigation
+
+          await nextPageLink.click();
+          await navigationPromise;
+
+          console.log(`Page ${pageNum} — waiting for listings...`);
+          await page.waitForSelector(".listing-card-v2, [da-listing-id]", {
+            timeout: 20000,
+          });
+          // Give SPA content a moment to fully render
+          await sleep(2000);
+          console.log("Listings loaded!");
+
+          const pageHtml = await page.content();
           const pageListings = parseListings(pageHtml, searchParams.minSize);
           allListings.push(...pageListings);
           console.log(
             `  Page ${pageNum}: Found ${pageListings.length} listings`,
           );
-          prevUrl = pageUrl;
         } catch (error) {
           console.error(`Error fetching page ${pageNum}:`, error.message);
         }
