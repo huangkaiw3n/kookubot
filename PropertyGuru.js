@@ -2,7 +2,14 @@ const puppeteer = require("puppeteer");
 const cheerio = require("cheerio");
 const fs = require("fs");
 const path = require("path");
-const { USER_AGENT, VIEWPORT, CF_COOKIE_ATTRS, BASE_HEADERS, BROWSER_ARGS, IGNORED_DEFAULT_ARGS } = require("./browser.config");
+const {
+  USER_AGENT,
+  VIEWPORT,
+  CF_COOKIE_ATTRS,
+  BASE_HEADERS,
+  BROWSER_ARGS,
+  IGNORED_DEFAULT_ARGS,
+} = require("./browser.config");
 
 // Search configuration
 const SEARCH_CONFIG = {
@@ -22,7 +29,9 @@ const SAVE_DEBUG_HTML = process.env.DEBUG_HTML === "1";
 // Try to load cookies from cookies.json for Puppeteer
 let browserCookies = [];
 try {
-  const cookieData = JSON.parse(fs.readFileSync(path.join(__dirname, "cookies.json"), "utf8"));
+  const cookieData = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "cookies.json"), "utf8"),
+  );
   browserCookies = Object.entries(cookieData).map(([name, value]) => ({
     name,
     value,
@@ -122,7 +131,10 @@ async function navigateAndGetHTML(page, url, maxRetries = 3) {
 
       if (SAVE_DEBUG_HTML) {
         try {
-          fs.writeFileSync(path.join(__dirname, "debug_response.html"), htmlContent);
+          fs.writeFileSync(
+            path.join(__dirname, "debug_response.html"),
+            htmlContent,
+          );
           console.log("Saved HTML to debug_response.html");
         } catch (err) {
           console.warn("Could not save debug HTML:", err.message);
@@ -382,7 +394,9 @@ async function fetchAndParseListings(searchParams) {
           const pageHtml = await navigateAndGetHTML(page, pageUrl);
           const pageListings = parseListings(pageHtml, searchParams.minSize);
           allListings.push(...pageListings);
-          console.log(`  Page ${pageNum}: Found ${pageListings.length} listings`);
+          console.log(
+            `  Page ${pageNum}: Found ${pageListings.length} listings`,
+          );
           prevUrl = pageUrl;
         } catch (error) {
           console.error(`Error fetching page ${pageNum}:`, error.message);
