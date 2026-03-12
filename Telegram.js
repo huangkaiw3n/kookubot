@@ -10,6 +10,12 @@ function sendMessage(message, options = {}) {
     text: message,
     ...options,
   };
+
+  // In dev mode, just log it instead of sending
+  if (process.env.env === "dev") {
+    console.log(payload);
+  }
+
   return axios.post(
     `https://api.telegram.org/bot${TELEGRAM_BOT_KEY}/sendMessage`,
     payload,

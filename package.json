@@ -4,6 +4,7 @@
   "description": "PropertyGuru property listing monitor running on home server",
   "main": "index.js",
   "scripts": {
+    "dev": "env=dev node index.js",
     "test": "node index.js",
     "start": "node index.js",
     "deploy": "zip -r function.zip . -x '*.git*' 'node_modules/@aws-sdk/*' && aws lambda update-function-code --function-name PropertyGuruMonitor --zip-file fileb://function.zip"
