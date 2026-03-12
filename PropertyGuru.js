@@ -119,11 +119,11 @@ async function navigateAndGetHTML(page, url, maxRetries = 3) {
       // the real page content. Wait for the listing selector to confirm.
       console.log(
         response.status() === 403
-          ? "Cloudflare challenge detected, waiting up to 60s for it to resolve..."
+          ? "Cloudflare challenge detected, waiting up to 15s for it to resolve..."
           : "Waiting for listings to load...",
       );
       await page.waitForSelector(".listing-card-v2, [da-listing-id]", {
-        timeout: 60000,
+        timeout: 15000,
       });
       console.log("Listings loaded!");
 
