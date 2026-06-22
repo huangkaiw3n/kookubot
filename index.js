@@ -27,6 +27,11 @@ const SEEN_LISTINGS_FILE = path.join(__dirname, "seen_listings.json");
 // In-memory storage of seen listing IDs
 let seenListingIds = new Set();
 
+// SGT date (e.g. "22/06/2026") of the last no-new-listings heartbeat sent.
+// In-memory: a restart sends one fresh heartbeat, which doubles as a
+// "bot is back up" confirmation.
+let lastHeartbeatDate = null;
+
 // Load seen listings from file
 function loadSeenListings() {
   try {
@@ -122,10 +127,9 @@ async function run() {
     console.log("PropertyGuru monitor completed", summary);
 
     // Send summary message
-    const summaryMessage =
-      summary.newListings === 0
-        ? `No new listings (${summary.totalListings} total)`
-        : `
+    if (summary.newListings > 0) {
+      // New listings are informative — always send with a notification.
+      const summaryMessage = `
         📊 PropertyGuru Monitor Summary
         📋 Listings found: ${summary.totalListings}
         🆕 New listings: ${summary.newListings}
@@ -133,10 +137,24 @@ async function run() {
         🕐 Completed at: ${new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}
         `.trim();
 
-    // Disable notification when number of new listings are 0
-    await sendMessage(summaryMessage, {
-      disable_notification: summary.newListings === 0,
-    });
+      await sendMessage(summaryMessage);
+    } else {
+      // No new listings: send a single silent heartbeat per day (first run of
+      // the day) to confirm the bot is alive without spamming the channel.
+      const todaySGT = new Date().toLocaleDateString("en-SG", {
+        timeZone: "Asia/Singapore",
+      });
+
+      if (todaySGT === lastHeartbeatDate) {
+        console.log("Heartbeat already sent today, skipping summary message");
+      } else {
+        await sendMessage(
+          `No new listings (${summary.totalListings} total) — bot alive`,
+          { disable_notification: true },
+        );
+        lastHeartbeatDate = todaySGT;
+      }
+    }
 
     return summary;
   } catch (error) {
