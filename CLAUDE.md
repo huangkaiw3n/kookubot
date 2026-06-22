@@ -18,6 +18,8 @@ There is no test suite — `npm test` just runs `index.js`. To exercise a single
 
 ### Environment variables
 
+A `.env` file (gitignored via `*.env`) is auto-loaded at startup — `index.js` calls `require("dotenv").config()` as its first statement, *before* requiring `Telegram.js` (which reads its keys at import time).
+
 - `TELEGRAM_BOT_KEY`, `CHAT_ID` — required to actually send Telegram messages.
 - `env=dev` — short-circuits Telegram sends to `console.log` (see `Telegram.js`).
 - `DEBUG_HTML=1` — persist scraped HTML for selector debugging.

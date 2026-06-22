@@ -1,3 +1,7 @@
+// Load .env into process.env before requiring modules that read env vars
+// (e.g. Telegram.js reads TELEGRAM_BOT_KEY/CHAT_ID at import time).
+require("dotenv").config();
+
 const PropertyGuru = require("./PropertyGuru");
 const { notifyNewListing, sendMessage } = require("./Telegram");
 const schedule = require("node-schedule");
