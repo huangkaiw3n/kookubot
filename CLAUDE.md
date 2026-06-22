@@ -38,15 +38,16 @@ Three modules, wired together in `index.js`:
 PropertyGuru sits behind Cloudflare, so scraping is fragile and the code is built around evading bot detection:
 
 1. `setupPage` derives the user agent from the bundled Chromium (stripping the `HeadlessChrome` marker) and injects `evaluateOnNewDocument` patches that spoof `navigator.webdriver`, plugins, languages, `window.chrome`, and the permissions API — all run *before* page load.
-2. `navigateWithChallenge` loads the first page with `waitUntil: "domcontentloaded"` (deliberately not `networkidle` — the CF challenge keeps the network busy and would time out). On a 403 it polls for the `cf_clearance` cookie, then waits for the listing selector to confirm real content loaded. It returns the HTML directly to avoid a redundant second navigation. `fetchAndParseListings` falls back to `navigateAndGetHTML` (with retries/backoff) if this returns null.
-3. **Pagination is done by clicking, not `page.goto()`** — a fresh navigation re-triggers the CF challenge, whereas an in-browser click on the `[da-id="hui-pagination-btn-page-N"]` button is treated as natural. Between pages it adds randomized "human reading" delays and scrolls to the bottom. Pagination may be SPA-driven or a full navigation, so it races a `waitForNavigation` (allowed to fail) against waiting for the listing selector.
+2. `navigateWithChallenge` loads a page with `waitUntil: "domcontentloaded"` (deliberately not `networkidle` — the CF challenge keeps the network busy and would time out). On a 403 it polls for the `cf_clearance` cookie, then waits for the listing selector to confirm real content loaded. It returns the HTML directly to avoid a redundant second navigation. `fetchPropertyGuruHTML` falls back to `navigateAndGetHTML` (with retries/backoff) if this returns null.
+3. **Each page is fetched in its own fresh browser session** via `fetchPropertyGuruHTML` (launch → navigate → close). This is load-bearing, not wasteful: the CF challenge re-fires on every navigation, and `navigateWithChallenge` only solves it by polling *while* the challenge runs. Reusing one session leaves a stale `cf_clearance` cookie that makes that poll short-circuit instantly, so the challenge never re-solves and every page after the first 403s. A fresh session (no cookie) waits correctly and succeeds. A randomized human-like delay separates page loads.
+4. **Pagination is path-based**: PropertyGuru paginates via `/property-for-sale/N`, *not* a `?page=N` query param (which it silently ignores, always returning page 1). `buildSearchUrl` puts the page number in the path for N > 1. (An earlier click-based approach using the `[da-id="hui-pagination-btn-page-N"]` buttons was abandoned — those buttons are JS-driven and `href` back to page 1, so clicks were unreliable.)
 
 ### Parsing & filtering
 
 `parseListings` extracts each card via PropertyGuru's `da-listing-id` / `.listing-card-v2` selectors (with fallbacks). A listing is **kept** only if it passes two filters:
 
 - size ≥ `minSize` (when both are present), and
-- its address **matches** `BLOCK_REGEX` (defined at the top of `PropertyGuru.js`) — this regex selects the block numbers of interest. Edit this constant to change which blocks are monitored.
+- it has a **non-empty address that matches** `BLOCK_REGEX` (defined at the top of `PropertyGuru.js`) — this regex selects the block numbers of interest. Edit this constant to change which blocks are monitored. Requiring a non-empty address also drops PropertyGuru's injected advertisement cards (larger private properties with no street address and a bogus size), which would otherwise slip past the filters.
 
 These selectors and the `.hui-pagination-root` pagination selector are coupled to PropertyGuru's current DOM. When scraping silently returns zero listings, the markup has likely changed — use `DEBUG_HTML=1` and inspect `debug_response.html` (the parser also logs candidate class names when no cards are found).
 

@@ -14,7 +14,6 @@ const SEARCH_CONFIG = {
   baseUrl: "https://www.propertyguru.com.sg/property-for-sale",
   defaultParams: {
     listingType: "sale",
-    page: 1,
     isCommercial: false,
   },
 };
@@ -329,10 +328,13 @@ function parseListings(htmlString, minSize) {
         return;
       }
 
-      // If address found and not address range of interest, skip it
-      if (listing.address && !BLOCK_REGEX.test(listing.address)) {
+      // Require an address that matches the block range of interest. An empty
+      // address means this isn't a real result from our search — PropertyGuru
+      // injects advertisement cards for larger private properties (no street
+      // address, bogus size) that must be excluded.
+      if (!listing.address || !BLOCK_REGEX.test(listing.address)) {
         console.log(
-          `Skipping listing ${listing.id}: Address ${listing.address} NOT in search range`,
+          `Skipping listing ${listing.id}: Address "${listing.address}" NOT in search range`,
         );
         return;
       }
@@ -350,21 +352,25 @@ function parseListings(htmlString, minSize) {
   return listings;
 }
 
-// Build search URL from parameters
+// Build search URL from parameters.
+// PropertyGuru paginates by PATH segment (/property-for-sale/N), NOT a query
+// param — a ?page=N query is silently ignored and always returns page 1.
 function buildSearchUrl(searchParams) {
+  const page = searchParams.page || 1;
+
   const params = {
     ...SEARCH_CONFIG.defaultParams,
     freetext: searchParams.street,
     _freetextDisplay: searchParams.street,
     minSize: searchParams.minSize,
-    page: searchParams.page || 1, // Use provided page or default to 1
   };
 
   const queryString = Object.entries(params)
     .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
     .join("&");
 
-  return `${SEARCH_CONFIG.baseUrl}?${queryString}`;
+  const url = page > 1 ? `${SEARCH_CONFIG.baseUrl}/${page}` : SEARCH_CONFIG.baseUrl;
+  return `${url}?${queryString}`;
 }
 
 // Extract total page count from HTML pagination
@@ -401,88 +407,44 @@ async function fetchAndParseListings(searchParams) {
 
   const allListings = [];
 
-  // Build URL for first page
-  let browser;
-  try {
-    browser = await launchBrowser();
-    const page = await setupPage(browser);
+  // Each page is fetched in its own fresh browser session (fetchPropertyGuruHTML
+  // launches and tears down a browser per call). This is deliberate: reusing one
+  // session across pages leaves a stale cf_clearance cookie that makes
+  // navigateWithChallenge short-circuit its wait, so Cloudflare's per-navigation
+  // challenge never gets time to re-solve and every page after the first 403s. A
+  // fresh session has no cookie, polls while the challenge solves, and succeeds.
+  const firstPageUrl = buildSearchUrl(searchParams);
+  const firstPageHtml = await fetchPropertyGuruHTML(firstPageUrl);
+  const firstPageListings = parseListings(firstPageHtml, searchParams.minSize);
+  allListings.push(...firstPageListings);
+  console.log(`First page: Found ${firstPageListings.length} listings`);
 
-    // Fetch first page — navigateWithChallenge handles the CF challenge
-    // and returns HTML directly without a redundant second navigation.
-    const firstPageUrl = buildSearchUrl(searchParams);
-    const firstPageHtml = await navigateWithChallenge(page, firstPageUrl)
-      || await navigateAndGetHTML(page, firstPageUrl);
-    const firstPageListings = parseListings(
-      firstPageHtml,
-      searchParams.minSize,
-    );
-    allListings.push(...firstPageListings);
-    console.log(`First page: Found ${firstPageListings.length} listings`);
+  // Check for additional pages
+  const totalPages = getTotalPages(firstPageHtml);
 
-    // Check for additional pages
-    const totalPages = getTotalPages(firstPageHtml);
+  if (totalPages > 1) {
+    console.log(`Found ${totalPages} total pages to fetch`);
 
-    if (totalPages > 1) {
-      console.log(`Found ${totalPages} total pages to fetch`);
+    for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
+      console.log(`Fetching page ${pageNum}/${totalPages}...`);
+      try {
+        // Small human-like pause between page loads.
+        await sleep(2000 + Math.random() * 2000);
 
-      for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
-        console.log(`Fetching page ${pageNum}/${totalPages}...`);
-        try {
-          // Simulate human reading the page before clicking next
-          const readDelay = 3000 + Math.random() * 3000;
-          await sleep(readDelay);
+        // PropertyGuru paginates by path (/property-for-sale/N); a ?page=N
+        // query is ignored.
+        const pageUrl = buildSearchUrl({ ...searchParams, page: pageNum });
+        const pageHtml = await fetchPropertyGuruHTML(pageUrl);
 
-          // Scroll to bottom where pagination lives
-          await page.evaluate(() =>
-            globalThis.scrollTo(0, document.body.scrollHeight),
-          );
-          await sleep(500 + Math.random() * 500);
-
-          // Click the pagination link instead of page.goto() — this produces
-          // a natural navigation that Cloudflare won't challenge.
-          // PropertyGuru uses da-id attributes for pagination buttons.
-          const nextPageLink = await page.$(
-            `[da-id="hui-pagination-btn-page-${pageNum}"]`,
-          );
-
-          if (!nextPageLink) {
-            console.warn(`No pagination link found for page ${pageNum}, stopping`);
-            break;
-          }
-
-          // Pagination may be SPA (JS-driven) or a full navigation.
-          // Listen for both: a network navigation OR new listing content.
-          const navigationPromise = page.waitForNavigation({
-            waitUntil: "domcontentloaded",
-            timeout: 15000,
-          }).catch(() => null); // SPA won't trigger navigation
-
-          await nextPageLink.click();
-          await navigationPromise;
-
-          console.log(`Page ${pageNum} — waiting for listings...`);
-          await page.waitForSelector(".listing-card-v2, [da-listing-id]", {
-            timeout: 20000,
-          });
-          // Give SPA content a moment to fully render
-          await sleep(2000);
-          console.log("Listings loaded!");
-
-          const pageHtml = await page.content();
-          const pageListings = parseListings(pageHtml, searchParams.minSize);
-          allListings.push(...pageListings);
-          console.log(
-            `  Page ${pageNum}: Found ${pageListings.length} listings`,
-          );
-        } catch (error) {
-          console.error(`Error fetching page ${pageNum}:`, error.message);
-        }
+        const pageListings = parseListings(pageHtml, searchParams.minSize);
+        allListings.push(...pageListings);
+        console.log(`  Page ${pageNum}: Found ${pageListings.length} listings`);
+      } catch (error) {
+        console.error(`Error fetching page ${pageNum}:`, error.message);
       }
-    } else {
-      console.log("No additional pages found");
     }
-  } finally {
-    if (browser) await browser.close().catch(() => {});
+  } else {
+    console.log("No additional pages found");
   }
 
   console.log(
