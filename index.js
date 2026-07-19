@@ -4,6 +4,7 @@ require("dotenv").config();
 
 const PropertyGuru = require("./PropertyGuru");
 const { notifyNewListing, sendMessage } = require("./Telegram");
+const { pingCronitor } = require("./Cronitor");
 const schedule = require("node-schedule");
 const fs = require("fs");
 const path = require("path");
@@ -30,11 +31,6 @@ const SEEN_LISTINGS_FILE = path.join(__dirname, "seen_listings.json");
 
 // In-memory storage of seen listing IDs
 let seenListingIds = new Set();
-
-// SGT date (e.g. "22/06/2026") of the last no-new-listings heartbeat sent.
-// In-memory: a restart sends one fresh heartbeat, which doubles as a
-// "bot is back up" confirmation.
-let lastHeartbeatDate = null;
 
 // Load seen listings from file
 function loadSeenListings() {
@@ -77,6 +73,9 @@ async function run() {
   });
 
   try {
+    // Tell Cronitor the run started (enables duration + hung-job detection).
+    await pingCronitor("run");
+
     // Step 1: Fetch and parse listings from PropertyGuru
     const listings = await PropertyGuru.fetchAndParseListings(SEARCH_CONFIG);
 
@@ -130,9 +129,9 @@ async function run() {
 
     console.log("PropertyGuru monitor completed", summary);
 
-    // Send summary message
+    // Only notify Telegram when there are new listings. Liveness is now tracked
+    // by Cronitor (see pingCronitor below), not a self-sent uptime heartbeat.
     if (summary.newListings > 0) {
-      // New listings are informative — always send with a notification.
       const summaryMessage = `
         📊 PropertyGuru Monitor Summary
         📋 Listings found: ${summary.totalListings}
@@ -143,26 +142,17 @@ async function run() {
 
       await sendMessage(summaryMessage);
     } else {
-      // No new listings: send a single silent heartbeat per day (first run of
-      // the day) to confirm the bot is alive without spamming the channel.
-      const todaySGT = new Date().toLocaleDateString("en-SG", {
-        timeZone: "Asia/Singapore",
-      });
-
-      if (todaySGT === lastHeartbeatDate) {
-        console.log("Heartbeat already sent today, skipping summary message");
-      } else {
-        await sendMessage(
-          `No new listings (${summary.totalListings} total) — bot alive`,
-          { disable_notification: true },
-        );
-        lastHeartbeatDate = todaySGT;
-      }
+      console.log("No new listings — nothing to notify");
     }
+
+    // Tell Cronitor the run finished successfully. If these stop arriving,
+    // Cronitor's Telegram integration alerts that the bot is down.
+    await pingCronitor("complete");
 
     return summary;
   } catch (error) {
     console.error("PropertyGuru monitor failed:", error);
+    await pingCronitor("fail", error.message);
     throw error;
   }
 }
@@ -186,13 +176,8 @@ function startScheduler() {
     try {
       await run();
     } catch (error) {
+      // run() already pinged Cronitor "fail"; Cronitor alerts via Telegram.
       console.error("Scheduled run failed:", error);
-      // Send error notification
-      try {
-        await sendMessage(`❌ PropertyGuru monitor error:\n${error.message}`);
-      } catch (notifyError) {
-        console.error("Failed to send error notification:", notifyError);
-      }
     }
   });
 

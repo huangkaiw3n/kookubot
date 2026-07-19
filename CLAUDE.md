@@ -21,16 +21,22 @@ There is no test suite — `npm test` just runs `index.js`. To exercise a single
 A `.env` file (gitignored via `*.env`) is auto-loaded at startup — `index.js` calls `require("dotenv").config()` as its first statement, *before* requiring `Telegram.js` (which reads its keys at import time).
 
 - `TELEGRAM_BOT_KEY`, `CHAT_ID` — required to actually send Telegram messages.
-- `env=dev` — short-circuits Telegram sends to `console.log` (see `Telegram.js`).
+- `CRONITOR_API_KEY`, `CRONITOR_MONITOR_KEY` — Cronitor account API key + monitor key, used by the official `cronitor` package. Optional; if either is unset, Cronitor pings are skipped. See below.
+- `env=dev` — short-circuits Telegram sends *and* Cronitor pings to `console.log` (see `Telegram.js` / `Cronitor.js`).
 - `DEBUG_HTML=1` — persist scraped HTML for selector debugging.
+
+### Liveness / down-alerting
+
+Liveness is tracked by **Cronitor** (via the official `cronitor` npm package), not a self-sent message. `run()` pings Cronitor `run` at start, `complete` on success, and `fail` (with the error message) on error, via `Cronitor.js` (`pingCronitor`, which wraps `new cronitor.Monitor(key).ping({ state, message })`). Cronitor's own Telegram integration — configured in the Cronitor dashboard, not in this repo — alerts when a `fail` arrives or when expected pings stop (process died / missed schedule). Telegram messages from the app itself are now sent **only when there are new listings**.
 
 ## Architecture
 
-Three modules, wired together in `index.js`:
+Modules, wired together in `index.js`:
 
-- **`index.js`** — orchestration + scheduling. Holds an in-memory `Set` of seen listing IDs persisted to `seen_listings.json` (loaded on startup, saved after each run and on SIGINT/SIGTERM). Diffs fetched listings against the set, notifies on new ones, and sends a run summary. `SEARCH_CONFIG` (street + minSize) and `SCHEDULE_PATTERN` (cron, server-local GMT+8 time) are defined here as constants.
+- **`index.js`** — orchestration + scheduling. Holds an in-memory `Set` of seen listing IDs persisted to `seen_listings.json` (loaded on startup, saved after each run and on SIGINT/SIGTERM). Diffs fetched listings against the set, notifies on new ones, sends a summary only when there are new listings, and pings Cronitor for liveness. `SEARCH_CONFIG` (street + minSize) and `SCHEDULE_PATTERN` (cron, server-local GMT+8 time) are defined here as constants.
 - **`PropertyGuru.js`** — the scraper. Drives Puppeteer to load the search, survive Cloudflare's JS challenge, paginate, and parse listings with Cheerio.
 - **`Telegram.js`** — message formatting + delivery via the Telegram Bot API.
+- **`Cronitor.js`** — `pingCronitor(state, message)` telemetry ping (`run`/`complete`/`fail`) for up/down monitoring; see "Liveness / down-alerting" above.
 - **`browser.config.js`** — viewport, HTTP headers, and Chrome launch flags tuned to suppress automation signals.
 
 ### The Cloudflare-bypass scraping flow (the tricky part)
