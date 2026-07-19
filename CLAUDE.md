@@ -29,6 +29,8 @@ A `.env` file (gitignored via `*.env`) is auto-loaded at startup — `index.js` 
 
 Liveness is tracked by **Cronitor** (via the official `cronitor` npm package), not a self-sent message. `run()` pings Cronitor `run` at start, `complete` on success, and `fail` (with the error message) on error, via `Cronitor.js` (`pingCronitor`, which wraps `new cronitor.Monitor(key).ping({ state, message })`). Cronitor's own Telegram integration — configured in the Cronitor dashboard, not in this repo — alerts when a `fail` arrives or when expected pings stop (process died / missed schedule). Telegram messages from the app itself are now sent **only when there are new listings**.
 
+Crucially, a **Telegram delivery failure also fails the run**: `run()` collects any `notifyNewListing`/`sendMessage` errors and throws at the end if any occurred, so a broken bot (bad token, bad `CHAT_ID`, rate limit) pings Cronitor `fail` instead of silently pinging `complete`. Because Cronitor's alert channel is independent of this app's bot, the alert still arrives. A listing whose notification failed is **not** marked seen, so it retries on the next run.
+
 ## Architecture
 
 Modules, wired together in `index.js`:

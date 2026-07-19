@@ -83,35 +83,43 @@ async function run() {
 
     // Step 2: Process each listing
     let newListingsCount = 0;
+    // Collect Telegram delivery failures so we can fail the run afterwards —
+    // otherwise a broken bot would be invisible to Cronitor (the run would
+    // still ping "complete").
+    const notificationErrors = [];
 
     for (const listing of listings) {
+      // Check if we've seen this listing before
+      if (seenListingIds.has(listing.id)) {
+        continue;
+      }
+
+      // New listing! Send notification
+      console.log("New listing found:", {
+        id: listing.id,
+        address: listing.address,
+        price: listing.price,
+        size: listing.size,
+      });
+
       try {
-        // Check if we've seen this listing before
-        const alreadySeen = seenListingIds.has(listing.id);
+        await notifyNewListing(listing);
+        newListingsCount++;
 
-        if (!alreadySeen) {
-          // New listing! Send notification
-          console.log("New listing found:", {
-            id: listing.id,
-            address: listing.address,
-            price: listing.price,
-            size: listing.size,
-          });
+        // Mark as seen only after a successful notification, so a failed send
+        // stays unseen and is retried on the next run.
+        seenListingIds.add(listing.id);
 
-          await notifyNewListing(listing);
-          newListingsCount++;
-
-          // Mark as seen
-          seenListingIds.add(listing.id);
-
-          // Wait a bit between notifications to avoid rate limits
-          if (newListingsCount < listings.length) {
-            await sleep(1000);
-          }
-        }
+        // Wait a bit between notifications to avoid rate limits
+        await sleep(1000);
       } catch (error) {
-        // Log but don't stop processing other listings
-        console.error("Error processing listing:", listing.id, error.message);
+        // Don't stop processing other listings, but remember the failure.
+        console.error(
+          "Failed to notify new listing:",
+          listing.id,
+          error.message,
+        );
+        notificationErrors.push(error);
       }
     }
 
@@ -140,9 +148,23 @@ async function run() {
         🕐 Completed at: ${new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}
         `.trim();
 
-      await sendMessage(summaryMessage);
+      try {
+        await sendMessage(summaryMessage);
+      } catch (error) {
+        console.error("Failed to send summary message:", error.message);
+        notificationErrors.push(error);
+      }
     } else {
       console.log("No new listings — nothing to notify");
+    }
+
+    // If any Telegram delivery failed, fail the run so the outer catch pings
+    // Cronitor "fail". Cronitor's own (independent) Telegram integration then
+    // alerts us — surfacing a broken bot that would otherwise go unnoticed.
+    if (notificationErrors.length > 0) {
+      throw new Error(
+        `Telegram delivery failed for ${notificationErrors.length} message(s): ${notificationErrors[0].message}`,
+      );
     }
 
     // Tell Cronitor the run finished successfully. If these stop arriving,
