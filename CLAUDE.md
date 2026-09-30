@@ -28,9 +28,10 @@ node -e 'const pg=require("./PropertyGuru");console.log(pg.parseListings(require
 
 - `TELEGRAM_BOT_KEY`, `CHAT_ID` — Telegram delivery.
 - `CRONITOR_API_KEY`, `CRONITOR_MONITOR_KEY` — optional; pings are skipped with a warning if either is unset.
+- `ANTHROPIC_API_KEY` — needed for searches with `reviewBrief`. Without it every review fails and messages say "Review unavailable".
 - `env=dev`, `DEBUG_HTML=1` — see Commands.
 
-What is monitored is set in code, not env: the searches in `searches.js` and `SCHEDULE_PATTERN` (server local time, SGT) in `index.js`. Each search has a `name` (used in Telegram messages), `params` (PropertyGuru query params merged over the defaults in `PropertyGuru.js`), and a `keep(listing)` filter. Optional: `budget` flags listings priced above it; `compareResale` adds the street's median HDB resale price.
+What is monitored is set in code, not env: the searches in `searches.js` and `SCHEDULE_PATTERN` (server local time, SGT) in `index.js`. Each search has a `name` (used in Telegram messages), `params` (PropertyGuru query params merged over the defaults in `PropertyGuru.js`), and a `keep(listing)` filter. Optional: `budget` flags listings priced above it; `compareResale` adds the street's median HDB resale price; `reviewBrief` (who the buyer is and what they need) turns on the Claude review.
 
 PropertyGuru params that work: `freetext`/`_freetextDisplay` (street), `minSize` (sqft), `propertyTypeGroup: "H"` (HDB only), `maxPrice`.
 
@@ -40,6 +41,7 @@ PropertyGuru params that work: `freetext`/`_freetextDisplay` (street), `minSize`
 - `searches.js` — the search definitions.
 - `PropertyGuru.js` — Puppeteer fetch (Cloudflare handling, pagination) and Cheerio parsing. Returns every real card; no search-specific filtering.
 - `Resale.js` — pulls the last 12 months of 2/3-room HDB resale transactions from data.gov.sg (dataset `d_8b84c4ee58e3cfc0ece0d773c8ca6abc`, no API key) and compares a listing with sales on the same street and flat type. Flat type comes from size (<560 sqft = 2-room, <850 = 3-room) because PropertyGuru bedroom counts are unreliable. Street names are converted to HDB abbreviations (`Commonwealth Close` → `C'WEALTH CL`) via `STREET_ABBREVIATIONS`. Only sales whose lease started within 10 years of the listing's build year count, since streets mix 1960s and new blocks and PropertyGuru's build year can precede HDB's lease start by ~9 years.
+- `ListingReview.js` — for each new listing of a search with `reviewBrief`, `index.js` fetches the listing page (`PropertyGuru.fetchListingDetails`: description, detail rows such as floor level, photo and floor plan URLs from the page's `__NEXT_DATA__`), and `reviewListing` sends up to 12 photos, the floor plan and the listing facts to Claude Opus 5.5 (`output_config.effort: "medium"`, JSON-schema structured output, `fallbacks: "default"` under beta `server-side-fallback-2026-07-01`). It returns `{ score, condition, summary, trip_to_church, concerns }`. Photos are downloaded and sent as base64 because PropertyGuru's image CDN returns 403 without a browser user agent and PropertyGuru referer. Each review costs roughly US$0.05–0.10 and adds one browser launch.
 - `browser.config.js` — viewport, request headers and Chrome flags chosen to hide automation signals.
 - `Telegram.js` — Bot API `sendMessage` via axios; listing messages use `parse_mode: "HTML"`.
 - `Cronitor.js` — `pingCronitor(state, message)` wrapping the `cronitor` package.
@@ -52,10 +54,13 @@ Liveness is tracked by Cronitor, not by messages the app sends itself. `run()` p
 - A listing is added to the seen set only after its notification succeeds, so failed sends retry next run.
 - A failed search (e.g. page 1 fetch fails) is recorded, the remaining searches still run, and the run is failed at the end. A failed fetch of page 2+ is logged and skipped.
 - A data.gov.sg failure only drops the resale comparison from messages; it does not fail the run.
+- A failed listing-page fetch or Claude review is shown in that listing's message ("Review unavailable: ...") and does not fail the run.
 
 ### Cloudflare and scraping
 
 This is the fragile part and most fixes land here.
+
+`fetchPropertyGuruHTML(url, { readySelector })` waits for `readySelector` to confirm real content loaded: search-result cards by default, `script#__NEXT_DATA__` for listing pages.
 
 1. `setupPage` takes the user agent from the bundled Chromium with `HeadlessChrome` replaced, and injects `evaluateOnNewDocument` patches (`navigator.webdriver`, plugins, languages, `window.chrome`, permissions query).
 2. `navigateWithChallenge` uses `waitUntil: "domcontentloaded"`; `networkidle` times out while the challenge runs. On a 403 it polls for the `cf_clearance` cookie, then waits for the listing selector and returns the HTML. If it returns null, `fetchPropertyGuruHTML` falls back to `navigateAndGetHTML` with retries.

@@ -57,7 +57,19 @@ function formatResale(price, resale) {
   return `${comparison} ${formatPrice(resale.median)} median (${resale.count} similar-age ${resale.flatType.toLowerCase()} sales on ${resale.street}, past year)`;
 }
 
-function formatListingMessage(listing, search, resale) {
+function formatReview(review) {
+  const lines = [
+    `🤖 <b>Claude: ${review.score}/10</b> · ${escapeHtml(review.condition)}`,
+    escapeHtml(review.summary),
+    `⛪ ${escapeHtml(review.trip_to_church)}`,
+    ...review.concerns.map((concern) => `• ${escapeHtml(concern)}`),
+  ];
+  return lines.join("\n");
+}
+
+// review is the ListingReview result, null when the search has no review, or
+// an Error when the review failed (shown so a broken review isn't silent).
+function formatListingMessage(listing, search, resale, review) {
   const price = listing.price ? parseInt(listing.price) : null;
   const overBudget = price && search.budget && price > search.budget;
 
@@ -72,6 +84,11 @@ function formatListingMessage(listing, search, resale) {
     `📏 <b>Size:</b> ${listing.size ? `${listing.size.toLocaleString()} sqft` : "Size not available"}`,
     listing.builtYear ? `🗓️ <b>Lease:</b> ${formatLease(listing.builtYear)}` : null,
     listing.nearestMrt ? `🚇 <b>MRT:</b> ${escapeHtml(listing.nearestMrt)}` : null,
+    review instanceof Error
+      ? `\n🤖 Review unavailable: ${escapeHtml(review.message)}`
+      : review
+        ? `\n${formatReview(review)}`
+        : null,
     `🔗 <b>Link:</b> ${listing.url ? `<a href="${listing.url}">View Listing</a>` : "URL not available"}`,
     "",
     `⏰ Found at: ${new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}`,
@@ -80,8 +97,8 @@ function formatListingMessage(listing, search, resale) {
   return lines.filter((line) => line !== null).join("\n");
 }
 
-function notifyNewListing(listing, search, resale) {
-  const message = formatListingMessage(listing, search, resale);
+function notifyNewListing(listing, search, resale, review) {
+  const message = formatListingMessage(listing, search, resale, review);
   return sendMessage(message, {
     parse_mode: "HTML",
     disable_web_page_preview: false,

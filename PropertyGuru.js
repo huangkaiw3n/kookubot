@@ -18,6 +18,9 @@ const SEARCH_CONFIG = {
   },
 };
 
+// Element that confirms real search results (not a Cloudflare challenge) loaded.
+const SEARCH_RESULTS_SELECTOR = ".listing-card-v2, [da-listing-id]";
+
 // Set to "1" to save debug_response.html after each successful page fetch
 const SAVE_DEBUG_HTML = process.env.DEBUG_HTML === "1";
 
@@ -80,7 +83,7 @@ async function setupPage(browser) {
 // Navigate to the target URL, let Cloudflare's JS challenge run, and return
 // the page HTML if listings are already present (avoids a redundant reload).
 // Returns null if the page didn't load usable content.
-async function navigateWithChallenge(page, targetUrl) {
+async function navigateWithChallenge(page, targetUrl, readySelector) {
   console.log(`Navigating (with CF challenge handling): ${targetUrl}`);
 
   try {
@@ -112,10 +115,10 @@ async function navigateWithChallenge(page, targetUrl) {
     }
 
     // Wait for listings to appear (challenge pages auto-redirect once solved)
-    await page.waitForSelector(".listing-card-v2, [da-listing-id]", {
+    await page.waitForSelector(readySelector, {
       timeout: 20000,
     });
-    console.log("Listings loaded!");
+    console.log("Page content loaded!");
 
     // Set Referer for subsequent navigations
     await page.setExtraHTTPHeaders({
@@ -146,7 +149,7 @@ async function navigateWithChallenge(page, targetUrl) {
 }
 
 // Navigate an existing page to a URL and return its HTML
-async function navigateAndGetHTML(page, url, maxRetries = 3) {
+async function navigateAndGetHTML(page, url, readySelector, maxRetries = 3) {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       console.log(`Navigating (attempt ${attempt + 1}/${maxRetries}):`, url);
@@ -167,10 +170,10 @@ async function navigateAndGetHTML(page, url, maxRetries = 3) {
           ? "Cloudflare challenge detected, waiting up to 15s for it to resolve..."
           : "Waiting for listings to load...",
       );
-      await page.waitForSelector(".listing-card-v2, [da-listing-id]", {
+      await page.waitForSelector(readySelector, {
         timeout: 15000,
       });
-      console.log("Listings loaded!");
+      console.log("Page content loaded!");
 
       const htmlContent = await page.content();
       console.log(`Successfully fetched HTML (${htmlContent.length} bytes)`);
@@ -204,13 +207,16 @@ async function navigateAndGetHTML(page, url, maxRetries = 3) {
 }
 
 // Fetch PropertyGuru HTML using Puppeteer (standalone — creates its own browser)
-async function fetchPropertyGuruHTML(url, maxRetries = 3) {
+async function fetchPropertyGuruHTML(
+  url,
+  { readySelector = SEARCH_RESULTS_SELECTOR, maxRetries = 3 } = {},
+) {
   let browser;
   try {
     browser = await launchBrowser();
     const page = await setupPage(browser);
-    return await navigateWithChallenge(page, url)
-      || await navigateAndGetHTML(page, url, maxRetries);
+    return await navigateWithChallenge(page, url, readySelector)
+      || await navigateAndGetHTML(page, url, readySelector, maxRetries);
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
@@ -453,8 +459,37 @@ async function fetchAndParseListings(searchParams) {
   return allListings;
 }
 
+// Listing pages are Next.js; everything we need is in the embedded page data,
+// which is absent on a Cloudflare challenge page.
+const LISTING_PAGE_SELECTOR = "script#__NEXT_DATA__";
+
+function htmlToText(html) {
+  return cheerio.load(`<div>${html.replace(/<br\s*\/?>/gi, "\n")}</div>`)("div").text().trim();
+}
+
+// Fetch a listing page and return its full description, detail rows (floor
+// level, furnishing, tenancy, ...), and photo / floor plan URLs.
+async function fetchListingDetails(url) {
+  const html = await fetchPropertyGuruHTML(url, {
+    readySelector: LISTING_PAGE_SELECTOR,
+  });
+  const $ = cheerio.load(html);
+  const data = JSON.parse($(LISTING_PAGE_SELECTOR).text()).props.pageProps
+    .pageData.data;
+  const media = data.mediaExplorerData?.mediaGroups || {};
+
+  return {
+    description: htmlToText(data.descriptionBlockData?.description || ""),
+    details: (data.detailsData?.metatable?.items || []).map((item) => item.value),
+    amenities: (data.amenitiesData?.data || []).map((item) => item.text),
+    photoUrls: (media.images?.items || []).map((item) => item.src),
+    floorPlanUrls: (media.floorPlans?.items || []).map((item) => item.src),
+  };
+}
+
 module.exports = {
   fetchAndParseListings,
+  fetchListingDetails,
   fetchPropertyGuruHTML,
   parseListings,
   buildSearchUrl,

@@ -11,6 +11,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.129.0",
     "axios": "^1.13.3",
     "cheerio": "^1.0.0-rc.12",
     "cronitor": "^2.6.1",

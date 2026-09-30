@@ -6,6 +6,7 @@ const PropertyGuru = require("./PropertyGuru");
 const { notifyNewListing, sendMessage } = require("./Telegram");
 const { pingCronitor } = require("./Cronitor");
 const { loadResaleBenchmarks, compareToResale } = require("./Resale");
+const { reviewListing } = require("./ListingReview");
 const SEARCHES = require("./searches");
 const schedule = require("node-schedule");
 const fs = require("fs");
@@ -71,6 +72,19 @@ async function loadBenchmarksIfNeeded() {
   }
 }
 
+// A failed review is returned (not thrown) so the listing is still notified,
+// with the error shown in the message.
+async function reviewIfNeeded(listing, search, resale) {
+  if (!search.reviewBrief) return null;
+  try {
+    const details = await PropertyGuru.fetchListingDetails(listing.url);
+    return await reviewListing(listing, details, resale, search);
+  } catch (error) {
+    console.error("Review failed:", listing.id, error.message);
+    return error;
+  }
+}
+
 // Notify new listings for one search. Delivery failures are pushed to
 // `notificationErrors` rather than thrown, so one bad send doesn't stop the rest.
 async function processSearch(search, benchmarks, notificationErrors) {
@@ -97,7 +111,8 @@ async function processSearch(search, benchmarks, notificationErrors) {
       const resale = search.compareResale
         ? compareToResale(benchmarks, listing)
         : null;
-      await notifyNewListing(listing, search, resale);
+      const review = await reviewIfNeeded(listing, search, resale);
+      await notifyNewListing(listing, search, resale, review);
       newListingsCount++;
 
       // Mark as seen only after a successful notification, so a failed send
