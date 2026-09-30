@@ -6,7 +6,7 @@ Keep this file current: when a change alters commands, architecture, config, or 
 
 ## Overview
 
-Node.js (CommonJS) bot that scrapes a PropertyGuru Singapore sale search (street + minimum size), keeps listings whose address matches a block-number regex, and posts new ones to Telegram. It runs as a long-lived process on a home server with an in-process cron scheduler (`node-schedule`).
+Node.js (CommonJS) bot that runs a list of PropertyGuru Singapore sale searches, filters each search's results in code, and posts new listings to Telegram. Current search (`searches.js`): 2/3-room HDB flats up to $320k (budget $300k) in areas with easy transport to Botanic Gardens MRT, for the user's mother. It runs as a long-lived process on a home server with an in-process cron scheduler (`node-schedule`).
 
 ## Commands
 
@@ -16,10 +16,10 @@ npm run dev              # env=dev: log Telegram payloads and Cronitor pings ins
 DEBUG_HTML=1 npm start   # write each fetched page to debug_response.html
 ```
 
-There is no test suite, linter, or build step. `npm test` is an alias for `npm start` and never exits. To check the parser offline against a saved page:
+There is no test suite, linter, or build step. `npm test` is an alias for `npm start` and never exits. To check parsing and one search's filter offline against a saved page:
 
 ```bash
-node -e 'const pg=require("./PropertyGuru");console.log(pg.parseListings(require("fs").readFileSync("debug_response.html","utf8"),1300))'
+node -e 'const pg=require("./PropertyGuru");console.log(pg.parseListings(require("fs").readFileSync("debug_response.html","utf8")).filter(require("./searches")[0].keep))'
 ```
 
 ## Configuration
@@ -30,12 +30,16 @@ node -e 'const pg=require("./PropertyGuru");console.log(pg.parseListings(require
 - `CRONITOR_API_KEY`, `CRONITOR_MONITOR_KEY` — optional; pings are skipped with a warning if either is unset.
 - `env=dev`, `DEBUG_HTML=1` — see Commands.
 
-What is monitored is set in code, not env: `SEARCH_CONFIG` and `SCHEDULE_PATTERN` (server local time, SGT) in `index.js`, and `BLOCK_REGEX` at the top of `PropertyGuru.js`. The Telegram listing heading in `Telegram.js` has "Bishan Street 13" hard-coded and does not follow `SEARCH_CONFIG`.
+What is monitored is set in code, not env: the searches in `searches.js` and `SCHEDULE_PATTERN` (server local time, SGT) in `index.js`. Each search has a `name` (used in Telegram messages), `params` (PropertyGuru query params merged over the defaults in `PropertyGuru.js`), and a `keep(listing)` filter. Optional: `budget` flags listings priced above it; `compareResale` adds the street's median HDB resale price.
+
+PropertyGuru params that work: `freetext`/`_freetextDisplay` (street), `minSize` (sqft), `propertyTypeGroup: "H"` (HDB only), `maxPrice`.
 
 ## Architecture
 
-- `index.js` — scheduling and orchestration. `run()` fetches listings, notifies for IDs not in the seen set, persists the set, and sends a summary only when there are new listings.
-- `PropertyGuru.js` — Puppeteer fetch (Cloudflare handling, pagination) and Cheerio parsing/filtering.
+- `index.js` — scheduling and orchestration. `run()` loads resale benchmarks once, then for each search fetches, filters with `keep`, notifies for IDs not in the (shared) seen set, persists the set, and sends one summary only when there are new listings.
+- `searches.js` — the search definitions.
+- `PropertyGuru.js` — Puppeteer fetch (Cloudflare handling, pagination) and Cheerio parsing. Returns every real card; no search-specific filtering.
+- `Resale.js` — pulls the last 12 months of 2/3-room HDB resale transactions from data.gov.sg (dataset `d_8b84c4ee58e3cfc0ece0d773c8ca6abc`, no API key) and compares a listing with sales on the same street and flat type. Flat type comes from size (<560 sqft = 2-room, <850 = 3-room) because PropertyGuru bedroom counts are unreliable. Street names are converted to HDB abbreviations (`Commonwealth Close` → `C'WEALTH CL`) via `STREET_ABBREVIATIONS`. Only sales whose lease started within 10 years of the listing's build year count, since streets mix 1960s and new blocks and PropertyGuru's build year can precede HDB's lease start by ~9 years.
 - `browser.config.js` — viewport, request headers and Chrome flags chosen to hide automation signals.
 - `Telegram.js` — Bot API `sendMessage` via axios; listing messages use `parse_mode: "HTML"`.
 - `Cronitor.js` — `pingCronitor(state, message)` wrapping the `cronitor` package.
@@ -46,7 +50,8 @@ Liveness is tracked by Cronitor, not by messages the app sends itself. `run()` p
 
 - Telegram send errors are collected and rethrown after all listings are processed, so a broken bot results in a Cronitor `fail` rather than `complete`.
 - A listing is added to the seen set only after its notification succeeds, so failed sends retry next run.
-- A failed fetch of page 1 fails the run. A failed fetch of page 2+ is logged and skipped; the run still completes.
+- A failed search (e.g. page 1 fetch fails) is recorded, the remaining searches still run, and the run is failed at the end. A failed fetch of page 2+ is logged and skipped.
+- A data.gov.sg failure only drops the resale comparison from messages; it does not fail the run.
 
 ### Cloudflare and scraping
 
@@ -59,10 +64,12 @@ This is the fragile part and most fixes land here.
 
 ### Parsing and filtering
 
-Cards are found via `.listing-card-v2` / `[da-listing-id]`; fields come from `da-listing-id`, `.listing-address`, `.listing-price`, `[da-id="listing-card-v2-area"] p` and `.card-footer[href]`. A listing is kept only if size ≥ `minSize` (when both are known) and it has a non-empty address matching `BLOCK_REGEX`. The non-empty address check also drops injected ad cards, which have no address and a bogus size.
+Cards are found via `.listing-card-v2` / `[da-listing-id]`; fields come from `da-listing-id`, `.listing-address` ("street, region", e.g. "86 Commonwealth Close, Alexandra / Commonwealth"), `.listing-price`, `[da-id="listing-card-v2-area"] p`, `[da-id="listing-card-v2-build-year"]`, `.listing-location-value` (nearest MRT and walk time) and `.agent-description` (headline). Card sections are identified by `da-id` attributes, not classes. The parser drops cards with no address (injected ads); everything else is filtered by each search's `keep`.
 
 If a run returns zero listings, PropertyGuru's markup has probably changed. Re-run with `DEBUG_HTML=1` and inspect `debug_response.html`; the parser also logs candidate class names when it finds no cards.
 
 ## Runtime state
 
-`seen_listings.json` (a JSON array of listing IDs) is the dedup state. It is gitignored, loaded on startup, and saved after each run and on SIGINT/SIGTERM. Deleting it makes the next run notify every current listing.
+`seen_listings.json` (a JSON array of listing IDs) is the dedup state, shared across searches. It is gitignored, loaded on startup, and saved after each run and on SIGINT/SIGTERM. Deleting it, or adding a new search, makes the next run notify every current match. The same unit listed by several agents has several IDs and is notified once per listing.
+
+`run()` called directly (not via `startScheduler`) starts with an empty seen set and still writes `seen_listings.json`.

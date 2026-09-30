@@ -5,15 +5,11 @@ require("dotenv").config();
 const PropertyGuru = require("./PropertyGuru");
 const { notifyNewListing, sendMessage } = require("./Telegram");
 const { pingCronitor } = require("./Cronitor");
+const { loadResaleBenchmarks, compareToResale } = require("./Resale");
+const SEARCHES = require("./searches");
 const schedule = require("node-schedule");
 const fs = require("fs");
 const path = require("path");
-
-// Search configuration
-const SEARCH_CONFIG = {
-  street: "Bishan Street 13",
-  minSize: 1300,
-};
 
 // Schedule configuration (cron format: minute hour day month dayOfWeek)
 // Note: Times are in server local time (GMT+8 / Singapore time)
@@ -63,90 +59,117 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Resale data only feeds the message, so a data.gov.sg outage shouldn't fail
+// the run.
+async function loadBenchmarksIfNeeded() {
+  if (!SEARCHES.some((search) => search.compareResale)) return null;
+  try {
+    return await loadResaleBenchmarks();
+  } catch (error) {
+    console.warn("Could not load resale benchmarks:", error.message);
+    return null;
+  }
+}
+
+// Notify new listings for one search. Delivery failures are pushed to
+// `notificationErrors` rather than thrown, so one bad send doesn't stop the rest.
+async function processSearch(search, benchmarks, notificationErrors) {
+  const allListings = await PropertyGuru.fetchAndParseListings(search.params);
+  const listings = allListings.filter(search.keep);
+  console.log(
+    `[${search.name}] ${listings.length} of ${allListings.length} listings match`,
+  );
+
+  let newListingsCount = 0;
+  for (const listing of listings) {
+    if (seenListingIds.has(listing.id)) {
+      continue;
+    }
+
+    console.log(`[${search.name}] New listing found:`, {
+      id: listing.id,
+      address: listing.address,
+      price: listing.price,
+      size: listing.size,
+    });
+
+    try {
+      const resale = search.compareResale
+        ? compareToResale(benchmarks, listing)
+        : null;
+      await notifyNewListing(listing, search, resale);
+      newListingsCount++;
+
+      // Mark as seen only after a successful notification, so a failed send
+      // stays unseen and is retried on the next run.
+      seenListingIds.add(listing.id);
+
+      // Wait a bit between notifications to avoid rate limits
+      await sleep(1000);
+    } catch (error) {
+      console.error("Failed to notify new listing:", listing.id, error.message);
+      notificationErrors.push(error);
+    }
+  }
+
+  return { name: search.name, found: listings.length, new: newListingsCount };
+}
+
 // Main function
 async function run() {
   const startTime = Date.now();
 
   console.log("PropertyGuru monitor started", {
     timestamp: new Date().toISOString(),
-    searchConfig: SEARCH_CONFIG,
+    searches: SEARCHES.map((search) => search.name),
   });
 
   try {
     // Tell Cronitor the run started (enables duration + hung-job detection).
     await pingCronitor("run");
 
-    // Step 1: Fetch and parse listings from PropertyGuru
-    const listings = await PropertyGuru.fetchAndParseListings(SEARCH_CONFIG);
+    const benchmarks = await loadBenchmarksIfNeeded();
 
-    console.log(`Found ${listings.length} listings matching criteria`);
-
-    // Step 2: Process each listing
-    let newListingsCount = 0;
     // Collect Telegram delivery failures so we can fail the run afterwards —
     // otherwise a broken bot would be invisible to Cronitor (the run would
     // still ping "complete").
     const notificationErrors = [];
+    // A failed search is recorded and the run carries on with the others; the
+    // run is failed at the end so Cronitor still alerts.
+    const searchErrors = [];
+    const results = [];
 
-    for (const listing of listings) {
-      // Check if we've seen this listing before
-      if (seenListingIds.has(listing.id)) {
-        continue;
-      }
-
-      // New listing! Send notification
-      console.log("New listing found:", {
-        id: listing.id,
-        address: listing.address,
-        price: listing.price,
-        size: listing.size,
-      });
-
+    for (const search of SEARCHES) {
       try {
-        await notifyNewListing(listing);
-        newListingsCount++;
-
-        // Mark as seen only after a successful notification, so a failed send
-        // stays unseen and is retried on the next run.
-        seenListingIds.add(listing.id);
-
-        // Wait a bit between notifications to avoid rate limits
-        await sleep(1000);
+        results.push(await processSearch(search, benchmarks, notificationErrors));
       } catch (error) {
-        // Don't stop processing other listings, but remember the failure.
-        console.error(
-          "Failed to notify new listing:",
-          listing.id,
-          error.message,
-        );
-        notificationErrors.push(error);
+        console.error(`[${search.name}] Search failed:`, error.message);
+        searchErrors.push(`${search.name}: ${error.message}`);
       }
     }
 
     // Save seen listings to file after processing
     saveSeenListings();
 
-    // Step 3: Log completion
     const duration = Date.now() - startTime;
-    const summary = {
-      totalListings: listings.length,
-      newListings: newListingsCount,
+    const newListings = results.reduce((sum, r) => sum + r.new, 0);
+    console.log("PropertyGuru monitor completed", {
+      results,
       duration: `${duration}ms`,
-      timestamp: new Date().toISOString(),
-    };
+    });
 
-    console.log("PropertyGuru monitor completed", summary);
-
-    // Only notify Telegram when there are new listings. Liveness is now tracked
+    // Only notify Telegram when there are new listings. Liveness is tracked
     // by Cronitor (see pingCronitor below), not a self-sent uptime heartbeat.
-    if (summary.newListings > 0) {
-      const summaryMessage = `
-        📊 PropertyGuru Monitor Summary
-        📋 Listings found: ${summary.totalListings}
-        🆕 New listings: ${summary.newListings}
-        ⏱️ Duration: ${summary.duration}
-        🕐 Completed at: ${new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}
-        `.trim();
+    if (newListings > 0) {
+      const perSearch = results
+        .map((r) => `• ${r.name}: ${r.new} new of ${r.found} matching`)
+        .join("\n");
+      const summaryMessage = [
+        "📊 PropertyGuru Monitor Summary",
+        perSearch,
+        `⏱️ Duration: ${duration}ms`,
+        `🕐 Completed at: ${new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}`,
+      ].join("\n");
 
       try {
         await sendMessage(summaryMessage);
@@ -156,6 +179,10 @@ async function run() {
       }
     } else {
       console.log("No new listings — nothing to notify");
+    }
+
+    if (searchErrors.length > 0) {
+      throw new Error(`Search failed — ${searchErrors.join("; ")}`);
     }
 
     // If any Telegram delivery failed, fail the run so the outer catch pings
@@ -171,7 +198,7 @@ async function run() {
     // Cronitor's Telegram integration alerts that the bot is down.
     await pingCronitor("complete");
 
-    return summary;
+    return results;
   } catch (error) {
     console.error("PropertyGuru monitor failed:", error);
     await pingCronitor("fail", error.message);

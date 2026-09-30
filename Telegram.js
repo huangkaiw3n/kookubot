@@ -33,33 +33,55 @@ function notifyError(error) {
   return sendMessage(message);
 }
 
-function formatListingMessage(listing) {
-  const priceFormatted = listing.price
-    ? `S$ ${parseInt(listing.price).toLocaleString()}`
-    : "Price not available";
-
-  const sizeFormatted = listing.size
-    ? `${listing.size.toLocaleString()} sqft`
-    : "Size not available";
-
-  const urlLink = listing.url
-    ? `<a href="${listing.url}">View Listing</a>`
-    : "URL not available";
-
-  return `
-🏠 <b>New Property on Bishan Street 13!</b>
-
-📍 <b>Address:</b> ${listing.address || "Address not available"}
-💰 <b>Price:</b> ${priceFormatted}
-📏 <b>Size:</b> ${sizeFormatted}
-🔗 <b>Link:</b> ${urlLink}
-
-⏰ Found at: ${new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}
-`.trim();
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
-function notifyNewListing(listing) {
-  const message = formatListingMessage(listing);
+function formatPrice(amount) {
+  return `S$ ${Math.round(amount).toLocaleString()}`;
+}
+
+function formatLease(builtYear) {
+  // Lease start is usually the build year, so this is an estimate.
+  const yearsLeft = 99 - (new Date().getFullYear() - builtYear);
+  return `Built ${builtYear} (~${yearsLeft} yrs lease left)`;
+}
+
+function formatResale(price, resale) {
+  const diffPct = Math.round(((price - resale.median) / resale.median) * 100);
+  const comparison =
+    diffPct === 0 ? "at" : `${Math.abs(diffPct)}% ${diffPct < 0 ? "below" : "above"}`;
+  return `${comparison} ${formatPrice(resale.median)} median (${resale.count} similar-age ${resale.flatType.toLowerCase()} sales on ${resale.street}, past year)`;
+}
+
+function formatListingMessage(listing, search, resale) {
+  const price = listing.price ? parseInt(listing.price) : null;
+  const overBudget = price && search.budget && price > search.budget;
+
+  const lines = [
+    `🏠 <b>New listing: ${escapeHtml(search.name)}</b>`,
+    listing.headline ? `<i>${escapeHtml(listing.headline)}</i>` : null,
+    "",
+    `📍 <b>Address:</b> ${escapeHtml(listing.address || "Address not available")}`,
+    `💰 <b>Price:</b> ${price ? formatPrice(price) : "Price not available"}` +
+      (overBudget ? ` ⚠️ ${formatPrice(price - search.budget)} over budget` : ""),
+    price && resale ? `📊 <b>Value:</b> ${escapeHtml(formatResale(price, resale))}` : null,
+    `📏 <b>Size:</b> ${listing.size ? `${listing.size.toLocaleString()} sqft` : "Size not available"}`,
+    listing.builtYear ? `🗓️ <b>Lease:</b> ${formatLease(listing.builtYear)}` : null,
+    listing.nearestMrt ? `🚇 <b>MRT:</b> ${escapeHtml(listing.nearestMrt)}` : null,
+    `🔗 <b>Link:</b> ${listing.url ? `<a href="${listing.url}">View Listing</a>` : "URL not available"}`,
+    "",
+    `⏰ Found at: ${new Date().toLocaleString("en-SG", { timeZone: "Asia/Singapore" })}`,
+  ];
+
+  return lines.filter((line) => line !== null).join("\n");
+}
+
+function notifyNewListing(listing, search, resale) {
+  const message = formatListingMessage(listing, search, resale);
   return sendMessage(message, {
     parse_mode: "HTML",
     disable_web_page_preview: false,

@@ -18,9 +18,6 @@ const SEARCH_CONFIG = {
   },
 };
 
-// Block filter configuration - Fill this to whatever you need
-const BLOCK_REGEX = /\b(158|16[0-6])\b/;
-
 // Set to "1" to save debug_response.html after each successful page fetch
 const SAVE_DEBUG_HTML = process.env.DEBUG_HTML === "1";
 
@@ -242,18 +239,39 @@ function extractListingData($element, $) {
   // URL is in .card-footer anchor element
   const url = $element.find(".card-footer").first().attr("href");
 
+  // Format: "Built: 1964"
+  const builtMatch = $element
+    .find('[da-id="listing-card-v2-build-year"]')
+    .first()
+    .text()
+    .match(/\d{4}/);
+  const builtYear = builtMatch ? parseInt(builtMatch[0]) : null;
+
+  // Format: "210 m (2 min) from EW20 Commonwealth MRT"
+  const nearestMrt = $element.find(".listing-location-value").first().text().trim();
+  const walkMatch = nearestMrt.match(/\((\d+) min\)/);
+  const mrtWalkMins = walkMatch ? parseInt(walkMatch[1]) : null;
+
+  // Agent-written headline, e.g. "Move-In Ready Home Next to Havelock MRT"
+  const headline = $element.find(".agent-description").first().text().trim();
+
   return {
     id: listingId,
     address,
     price,
     size,
     url,
+    builtYear,
+    nearestMrt,
+    mrtWalkMins,
+    headline,
     extractedAt: new Date().toISOString(),
   };
 }
 
-// Parse HTML to extract listings
-function parseListings(htmlString, minSize) {
+// Parse HTML to extract listings. Search-specific filtering is done by the
+// caller (see searches.js).
+function parseListings(htmlString) {
   const $ = cheerio.load(htmlString);
   const listings = [];
 
@@ -320,22 +338,11 @@ function parseListings(htmlString, minSize) {
         return;
       }
 
-      // Filter by minimum size if specified
-      if (minSize && listing.size && listing.size < minSize) {
-        console.log(
-          `Skipping listing ${listing.id}: Size ${listing.size} < ${minSize} sqft`,
-        );
-        return;
-      }
-
-      // Require an address that matches the block range of interest. An empty
-      // address means this isn't a real result from our search — PropertyGuru
-      // injects advertisement cards for larger private properties (no street
-      // address, bogus size) that must be excluded.
-      if (!listing.address || !BLOCK_REGEX.test(listing.address)) {
-        console.log(
-          `Skipping listing ${listing.id}: Address "${listing.address}" NOT in search range`,
-        );
+      // An empty address means this isn't a real result from our search —
+      // PropertyGuru injects advertisement cards for larger private
+      // properties (no street address, bogus size) that must be excluded.
+      if (!listing.address) {
+        console.log(`Skipping listing ${listing.id}: no address (ad card)`);
         return;
       }
 
@@ -355,15 +362,8 @@ function parseListings(htmlString, minSize) {
 // Build search URL from parameters.
 // PropertyGuru paginates by PATH segment (/property-for-sale/N), NOT a query
 // param — a ?page=N query is silently ignored and always returns page 1.
-function buildSearchUrl(searchParams) {
-  const page = searchParams.page || 1;
-
-  const params = {
-    ...SEARCH_CONFIG.defaultParams,
-    freetext: searchParams.street,
-    _freetextDisplay: searchParams.street,
-    minSize: searchParams.minSize,
-  };
+function buildSearchUrl(searchParams, page = 1) {
+  const params = { ...SEARCH_CONFIG.defaultParams, ...searchParams };
 
   const queryString = Object.entries(params)
     .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
@@ -415,7 +415,7 @@ async function fetchAndParseListings(searchParams) {
   // fresh session has no cookie, polls while the challenge solves, and succeeds.
   const firstPageUrl = buildSearchUrl(searchParams);
   const firstPageHtml = await fetchPropertyGuruHTML(firstPageUrl);
-  const firstPageListings = parseListings(firstPageHtml, searchParams.minSize);
+  const firstPageListings = parseListings(firstPageHtml);
   allListings.push(...firstPageListings);
   console.log(`First page: Found ${firstPageListings.length} listings`);
 
@@ -433,10 +433,10 @@ async function fetchAndParseListings(searchParams) {
 
         // PropertyGuru paginates by path (/property-for-sale/N); a ?page=N
         // query is ignored.
-        const pageUrl = buildSearchUrl({ ...searchParams, page: pageNum });
+        const pageUrl = buildSearchUrl(searchParams, pageNum);
         const pageHtml = await fetchPropertyGuruHTML(pageUrl);
 
-        const pageListings = parseListings(pageHtml, searchParams.minSize);
+        const pageListings = parseListings(pageHtml);
         allListings.push(...pageListings);
         console.log(`  Page ${pageNum}: Found ${pageListings.length} listings`);
       } catch (error) {
