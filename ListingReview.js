@@ -26,7 +26,8 @@ const REVIEW_SCHEMA = {
     concerns: {
       type: "array",
       items: { type: "string" },
-      description: "Short points the buyer should check before viewing; empty if none",
+      description:
+        "Short points to verify about the flat as listed before viewing; empty if none",
     },
   },
   required: ["score", "condition", "summary", "trip_to_church", "concerns"],
@@ -40,6 +41,8 @@ Judge the flat's condition from the photos and description: "move-in ready" mean
 Value: the listing includes the median price of similar-age flats of the same type recently sold on the same street when that data exists. Weigh price against condition, remaining lease and location.
 
 Location: use what you know about Singapore's MRT network, bus routes and HDB estates. Say when you are estimating.
+
+Leave out financing and resale advice (CPF usage, loans, how the flat's value will hold up) and renovation or modification suggestions (grab bars, non-slip floors, what a renovation could add). The family handles those separately. Concerns should only cover things to verify about the flat and its surroundings as listed.
 
 Write plainly for a family member deciding whether to arrange a viewing.`;
 
