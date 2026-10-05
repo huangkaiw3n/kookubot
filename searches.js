@@ -9,6 +9,9 @@
 //   reviewBrief    — who the buyer is and what they need; when set, Claude
 //                    reviews each new listing's photos and description
 //                    (see ListingReview.js).
+//   minScore       — only notify listings Claude scores at least this (needs
+//                    reviewBrief); lower-scored listings are marked seen
+//                    without a message. Failed reviews are still sent.
 
 // Areas with an easy trip to Botanic Gardens MRT (Circle/Downtown lines),
 // matched against PropertyGuru's "address, region" text.
@@ -31,6 +34,7 @@ module.exports = [
     compareResale: true,
     reviewBrief:
       "A 71-year-old woman buying a 2- or 3-room HDB flat to live in. She is price sensitive: budget S$300k, and will only pay slightly more for a move-in-ready flat. She needs convenient shops, groceries and public transport, and travels regularly to church at 17D Adam Road (near Botanic Gardens MRT, Circle and Downtown lines). Lift access, floor level and steps matter at her age.",
+    minScore: 6,
     keep: (listing) =>
       listing.size >= MIN_HDB_2_ROOM_SQFT &&
       MUM_AREAS.test(listing.address) &&

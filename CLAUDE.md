@@ -31,13 +31,13 @@ node -e 'const pg=require("./PropertyGuru");console.log(pg.parseListings(require
 - `ANTHROPIC_API_KEY` — needed for searches with `reviewBrief`. Without it every review fails and messages say "Review unavailable".
 - `env=dev`, `DEBUG_HTML=1` — see Commands.
 
-What is monitored is set in code, not env: the searches in `searches.js` and `SCHEDULE_PATTERN` (server local time, SGT) in `index.js`. Each search has a `name` (used in Telegram messages), `params` (PropertyGuru query params merged over the defaults in `PropertyGuru.js`), and a `keep(listing)` filter. Optional: `budget` flags listings priced above it; `compareResale` adds the street's median HDB resale price; `reviewBrief` (who the buyer is and what they need) turns on the Claude review.
+What is monitored is set in code, not env: the searches in `searches.js` and `SCHEDULE_PATTERN` (server local time, SGT) in `index.js`. Each search has a `name` (used in Telegram messages), `params` (PropertyGuru query params merged over the defaults in `PropertyGuru.js`), and a `keep(listing)` filter. Optional: `budget` flags listings priced above it; `compareResale` adds the street's median HDB resale price; `reviewBrief` (who the buyer is and what they need) turns on the Claude review; `minScore` (with `reviewBrief`) filters out listings scoring below this threshold.
 
 PropertyGuru params that work: `freetext`/`_freetextDisplay` (street), `minSize` (sqft), `propertyTypeGroup: "H"` (HDB only), `maxPrice`.
 
 ## Architecture
 
-- `index.js` — scheduling and orchestration. `run()` loads resale benchmarks once, then for each search fetches, filters with `keep`, notifies for IDs not in the (shared) seen set, persists the set, and sends one summary only when there are new listings.
+- `index.js` — scheduling and orchestration. `run()` loads resale benchmarks once, then for each search fetches, filters with `keep`, notifies for IDs not in the (shared) seen map, persists the map, and sends one summary only when there are new listings.
 - `searches.js` — the search definitions.
 - `PropertyGuru.js` — Puppeteer fetch (Cloudflare handling, pagination) and Cheerio parsing. Returns every real card; no search-specific filtering.
 - `Resale.js` — pulls the last 12 months of 2/3-room HDB resale transactions from data.gov.sg (dataset `d_8b84c4ee58e3cfc0ece0d773c8ca6abc`, no API key) and compares a listing with sales on the same street and flat type. Flat type comes from size (<560 sqft = 2-room, <850 = 3-room) because PropertyGuru bedroom counts are unreliable. Street names are converted to HDB abbreviations (`Commonwealth Close` → `C'WEALTH CL`) via `STREET_ABBREVIATIONS`. Only sales whose lease started within 10 years of the listing's build year count, since streets mix 1960s and new blocks and PropertyGuru's build year can precede HDB's lease start by ~9 years.
@@ -51,10 +51,11 @@ PropertyGuru params that work: `freetext`/`_freetextDisplay` (street), `minSize`
 Liveness is tracked by Cronitor, not by messages the app sends itself. `run()` pings `run` at start, `complete` on success and `fail` on any thrown error. Down/failure alerts come from Cronitor's own Telegram integration, configured in the Cronitor dashboard.
 
 - Telegram send errors are collected and rethrown after all listings are processed, so a broken bot results in a Cronitor `fail` rather than `complete`.
-- A listing is added to the seen set only after its notification succeeds, so failed sends retry next run.
+- A listing is added to the seen map only after its notification succeeds, so failed sends retry next run.
 - A failed search (e.g. page 1 fetch fails) is recorded, the remaining searches still run, and the run is failed at the end. A failed fetch of page 2+ is logged and skipped.
 - A data.gov.sg failure only drops the resale comparison from messages; it does not fail the run.
 - A failed listing-page fetch or Claude review is shown in that listing's message ("Review unavailable: ...") and does not fail the run.
+- Listings scoring below `minScore` (if set) are marked seen without a message (recorded with `notified: false` and their score); failed reviews and null reviews are always sent.
 
 ### Cloudflare and scraping
 
@@ -75,6 +76,6 @@ If a run returns zero listings, PropertyGuru's markup has probably changed. Re-r
 
 ## Runtime state
 
-`seen_listings.json` (a JSON array of listing IDs) is the dedup state, shared across searches. It is gitignored, loaded on startup, and saved after each run and on SIGINT/SIGTERM. Deleting it, or adding a new search, makes the next run notify every current match. The same unit listed by several agents has several IDs and is notified once per listing.
+`seen_listings.json` (a JSON object keyed by listing ID) is the dedup state, shared across searches. Each entry is `{ search, address, price, size, url, score, notified, seenAt }`: `score` is Claude's review score (null when there was no review or it failed), `notified` is false for listings skipped for scoring below `minScore`, and `seenAt` is an ISO timestamp. It is gitignored, loaded on startup, and saved after each run and on SIGINT/SIGTERM. A legacy file holding an array of IDs is converted on load to `{ notified: true }` entries and rewritten in the new format on the next save. Deleting it, or adding a new search, makes the next run notify every current match. The same unit listed by several agents has several IDs and is notified once per listing.
 
-`run()` called directly (not via `startScheduler`) starts with an empty seen set and still writes `seen_listings.json`.
+`run()` called directly (not via `startScheduler`) starts with an empty seen map and still writes `seen_listings.json`.

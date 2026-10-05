@@ -23,19 +23,23 @@ const path = require("path");
 //   "0 9,12,15,18,21 * * *" - At 9am, 12pm, 3pm, 6pm, 9pm SGT
 const SCHEDULE_PATTERN = "0 9,12,15,18,21 * * *";
 
-// File to persist seen listing IDs
+// File to persist seen listings (object keyed by listing ID)
 const SEEN_LISTINGS_FILE = path.join(__dirname, "seen_listings.json");
 
-// In-memory storage of seen listing IDs
-let seenListingIds = new Set();
+// In-memory storage of seen listings: id -> entry (see markSeen)
+let seenListings = new Map();
 
-// Load seen listings from file
+// Load seen listings from file. The legacy format was an array of IDs.
 function loadSeenListings() {
   try {
     if (fs.existsSync(SEEN_LISTINGS_FILE)) {
       const data = JSON.parse(fs.readFileSync(SEEN_LISTINGS_FILE, "utf8"));
-      seenListingIds = new Set(data);
-      console.log(`Loaded ${seenListingIds.size} seen listings from file`);
+      seenListings = new Map(
+        Array.isArray(data)
+          ? data.map((id) => [id, { notified: true }])
+          : Object.entries(data),
+      );
+      console.log(`Loaded ${seenListings.size} seen listings from file`);
     }
   } catch (error) {
     console.warn("Failed to load seen listings:", error.message);
@@ -47,12 +51,26 @@ function saveSeenListings() {
   try {
     fs.writeFileSync(
       SEEN_LISTINGS_FILE,
-      JSON.stringify(Array.from(seenListingIds), null, 2),
+      JSON.stringify(Object.fromEntries(seenListings), null, 2),
     );
-    console.log(`Saved ${seenListingIds.size} seen listings to file`);
+    console.log(`Saved ${seenListings.size} seen listings to file`);
   } catch (error) {
     console.error("Failed to save seen listings:", error.message);
   }
+}
+
+// `score` is null when there was no review or it failed.
+function markSeen(listing, search, score, notified) {
+  seenListings.set(listing.id, {
+    search: search.name,
+    address: listing.address,
+    price: listing.price,
+    size: listing.size,
+    url: listing.url,
+    score,
+    notified,
+    seenAt: new Date().toISOString(),
+  });
 }
 
 // Helper: Sleep utility
@@ -96,7 +114,7 @@ async function processSearch(search, benchmarks, notificationErrors) {
 
   let newListingsCount = 0;
   for (const listing of listings) {
-    if (seenListingIds.has(listing.id)) {
+    if (seenListings.has(listing.id)) {
       continue;
     }
 
@@ -112,12 +130,24 @@ async function processSearch(search, benchmarks, notificationErrors) {
         ? compareToResale(benchmarks, listing)
         : null;
       const review = await reviewIfNeeded(listing, search, resale);
+      const score = review && !(review instanceof Error) ? review.score : null;
+
+      // Low scorers are marked seen so they aren't re-reviewed (and re-billed)
+      // every run. Failed reviews are still sent.
+      if (search.minScore && score !== null && score < search.minScore) {
+        console.log(
+          `[${search.name}] Skipping ${listing.id}: score ${score} below ${search.minScore}`,
+        );
+        markSeen(listing, search, score, false);
+        continue;
+      }
+
       await notifyNewListing(listing, search, resale, review);
       newListingsCount++;
 
       // Mark as seen only after a successful notification, so a failed send
       // stays unseen and is retried on the next run.
-      seenListingIds.add(listing.id);
+      markSeen(listing, search, score, true);
 
       // Wait a bit between notifications to avoid rate limits
       await sleep(1000);
