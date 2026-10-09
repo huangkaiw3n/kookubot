@@ -57,6 +57,8 @@ Liveness is tracked by Cronitor, not by messages the app sends itself. `run()` p
 - A failed listing-page fetch or Claude review is shown in that listing's message ("Review unavailable: ...") and does not fail the run.
 - Listings scoring below `minScore` (if set) are marked seen without a message (recorded with `notified: false` and their score); failed reviews and null reviews are always sent.
 
+Console output is one line per page fetched (listing count, Cloudflare wait and total fetch time), one per search, and one per new listing with its outcome (score and sent/skipped), plus run start/completion. Warnings and errors include the URL, HTTP status and whether the fetch was waiting on `cf_clearance`.
+
 ### Cloudflare and scraping
 
 This is the fragile part and most fixes land here.

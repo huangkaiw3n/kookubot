@@ -80,45 +80,56 @@ async function setupPage(browser) {
   return page;
 }
 
+// Save the page to debug_response.html when DEBUG_HTML=1
+function saveDebugHtml(htmlContent) {
+  if (!SAVE_DEBUG_HTML) return;
+  try {
+    fs.writeFileSync(path.join(__dirname, "debug_response.html"), htmlContent);
+    console.log("Saved HTML to debug_response.html");
+  } catch (err) {
+    console.warn("Could not save debug HTML:", err.message);
+  }
+}
+
 // Navigate to the target URL, let Cloudflare's JS challenge run, and return
 // the page HTML if listings are already present (avoids a redundant reload).
-// Returns null if the page didn't load usable content.
-async function navigateWithChallenge(page, targetUrl, readySelector) {
-  console.log(`Navigating (with CF challenge handling): ${targetUrl}`);
+// Returns null if the page didn't load usable content. Time spent solving the
+// challenge is recorded in `timings.cloudflareMs`.
+async function navigateWithChallenge(page, targetUrl, readySelector, timings) {
+  let status = "no response";
+  let cloudflare = "no challenge";
 
   try {
     const response = await page.goto(targetUrl, {
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
-    console.log(`Response status: ${response.status()}`);
+    status = response.status();
 
     // If we got a challenge (403), poll for cf_clearance then wait for
     // the page to auto-refresh with real content.
-    if (response.status() === 403) {
-      console.log("Cloudflare challenge detected, waiting for it to resolve...");
+    if (status === 403) {
+      cloudflare = "timed out waiting for cf_clearance";
 
       const maxWaitMs = 30000;
       const pollMs = 2000;
-      let elapsed = 0;
+      const startedAt = Date.now();
 
-      while (elapsed < maxWaitMs) {
+      while (Date.now() - startedAt < maxWaitMs) {
         const cookies = await page.cookies();
         if (cookies.some((c) => c.name === "cf_clearance")) {
-          console.log(`cf_clearance obtained after ${elapsed / 1000}s`);
+          cloudflare = "cf_clearance obtained";
           break;
         }
         await sleep(pollMs);
-        elapsed += pollMs;
-        console.log(`Waiting for cf_clearance... (${elapsed / 1000}s)`);
       }
+      timings.cloudflareMs = Date.now() - startedAt;
     }
 
     // Wait for listings to appear (challenge pages auto-redirect once solved)
     await page.waitForSelector(readySelector, {
       timeout: 20000,
     });
-    console.log("Page content loaded!");
 
     // Set Referer for subsequent navigations
     await page.setExtraHTTPHeaders({
@@ -127,23 +138,12 @@ async function navigateWithChallenge(page, targetUrl, readySelector) {
     });
 
     const htmlContent = await page.content();
-    console.log(`Successfully fetched HTML (${htmlContent.length} bytes)`);
-
-    if (SAVE_DEBUG_HTML) {
-      try {
-        fs.writeFileSync(
-          path.join(__dirname, "debug_response.html"),
-          htmlContent,
-        );
-        console.log("Saved HTML to debug_response.html");
-      } catch (err) {
-        console.warn("Could not save debug HTML:", err.message);
-      }
-    }
-
+    saveDebugHtml(htmlContent);
     return htmlContent;
   } catch (error) {
-    console.warn("navigateWithChallenge failed:", error.message);
+    console.warn(
+      `navigateWithChallenge failed for ${targetUrl} (HTTP ${status}, ${cloudflare}): ${error.message}`,
+    );
     return null;
   }
 }
@@ -151,56 +151,33 @@ async function navigateWithChallenge(page, targetUrl, readySelector) {
 // Navigate an existing page to a URL and return its HTML
 async function navigateAndGetHTML(page, url, readySelector, maxRetries = 3) {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
+    let status = "no response";
     try {
-      console.log(`Navigating (attempt ${attempt + 1}/${maxRetries}):`, url);
-
       // Use domcontentloaded so we return quickly and don't block on
       // Cloudflare challenge network activity (which causes networkidle2 to timeout)
       const response = await page.goto(url, {
         waitUntil: "domcontentloaded",
         timeout: 30000,
       });
-
-      console.log(`Response status: ${response.status()}`);
+      status = response.status();
 
       // Don't bail on 403 — Cloudflare's JS challenge may still run and load
       // the real page content. Wait for the listing selector to confirm.
-      console.log(
-        response.status() === 403
-          ? "Cloudflare challenge detected, waiting up to 15s for it to resolve..."
-          : "Waiting for listings to load...",
-      );
       await page.waitForSelector(readySelector, {
         timeout: 15000,
       });
-      console.log("Page content loaded!");
 
       const htmlContent = await page.content();
-      console.log(`Successfully fetched HTML (${htmlContent.length} bytes)`);
-
-      if (SAVE_DEBUG_HTML) {
-        try {
-          fs.writeFileSync(
-            path.join(__dirname, "debug_response.html"),
-            htmlContent,
-          );
-          console.log("Saved HTML to debug_response.html");
-        } catch (err) {
-          console.warn("Could not save debug HTML:", err.message);
-        }
-      }
-
+      saveDebugHtml(htmlContent);
       return htmlContent;
     } catch (error) {
+      const failure = `${url} (attempt ${attempt + 1}/${maxRetries}, HTTP ${status}${status === 403 ? ", waiting on Cloudflare challenge" : ""}): ${error.message}`;
       if (attempt === maxRetries - 1) {
-        console.error("Failed to fetch after all retries:", error.message);
+        console.error("Failed to fetch after all retries:", failure);
         throw error;
       }
       const backoffMs = 2000 * (attempt + 1);
-      console.log(
-        `Error occurred, retrying in ${backoffMs}ms...`,
-        error.message,
-      );
+      console.log(`Retrying in ${backoffMs}ms after error: ${failure}`);
       await sleep(backoffMs);
     }
   }
@@ -209,13 +186,13 @@ async function navigateAndGetHTML(page, url, readySelector, maxRetries = 3) {
 // Fetch PropertyGuru HTML using Puppeteer (standalone — creates its own browser)
 async function fetchPropertyGuruHTML(
   url,
-  { readySelector = SEARCH_RESULTS_SELECTOR, maxRetries = 3 } = {},
+  { readySelector = SEARCH_RESULTS_SELECTOR, maxRetries = 3, timings = {} } = {},
 ) {
   let browser;
   try {
     browser = await launchBrowser();
     const page = await setupPage(browser);
-    return await navigateWithChallenge(page, url, readySelector)
+    return await navigateWithChallenge(page, url, readySelector, timings)
       || await navigateAndGetHTML(page, url, readySelector, maxRetries);
   } finally {
     if (browser) await browser.close().catch(() => {});
@@ -281,8 +258,6 @@ function parseListings(htmlString) {
   const $ = cheerio.load(htmlString);
   const listings = [];
 
-  console.log("Parsing HTML for property listings...");
-
   // Try multiple selectors for listing cards (PropertyGuru uses listing-card-v2)
   const selectors = [
     ".listing-card-v2", // Primary selector for PropertyGuru
@@ -294,9 +269,6 @@ function parseListings(htmlString) {
   for (const selector of selectors) {
     $elements = $(selector);
     if ($elements.length > 0) {
-      console.log(
-        `Found ${$elements.length} elements with selector: ${selector}`,
-      );
       break;
     }
   }
@@ -347,10 +319,7 @@ function parseListings(htmlString) {
       // An empty address means this isn't a real result from our search —
       // PropertyGuru injects advertisement cards for larger private
       // properties (no street address, bogus size) that must be excluded.
-      if (!listing.address) {
-        console.log(`Skipping listing ${listing.id}: no address (ad card)`);
-        return;
-      }
+      if (!listing.address) return;
 
       listings.push(listing);
     } catch (error) {
@@ -361,7 +330,6 @@ function parseListings(htmlString) {
     }
   });
 
-  console.log(`Parsed ${listings.length} valid listings`);
   return listings;
 }
 
@@ -404,58 +372,53 @@ function getTotalPages(htmlString) {
   return 1; // Default to 1 page if no pagination found
 }
 
+// Fetch and parse one results page, logging its listing count and fetch time.
+// Each page is fetched in its own fresh browser session (fetchPropertyGuruHTML
+// launches and tears down a browser per call). This is deliberate: reusing one
+// session across pages leaves a stale cf_clearance cookie that makes
+// navigateWithChallenge short-circuit its wait, so Cloudflare's per-navigation
+// challenge never gets time to re-solve and every page after the first 403s. A
+// fresh session has no cookie, polls while the challenge solves, and succeeds.
+async function fetchResultsPage(searchParams, pageNum, totalPages) {
+  const timings = {};
+  const startedAt = Date.now();
+  const html = await fetchPropertyGuruHTML(buildSearchUrl(searchParams, pageNum), {
+    timings,
+  });
+  const listings = parseListings(html);
+
+  const seconds = (ms) => `${Math.round(ms / 1000)}s`;
+  const fetchTime = seconds(Date.now() - startedAt);
+  const timing = timings.cloudflareMs
+    ? `Cloudflare ${seconds(timings.cloudflareMs)}, ${fetchTime}`
+    : fetchTime;
+  console.log(`Page ${pageNum}/${totalPages ?? getTotalPages(html)}: ${listings.length} listings (${timing})`);
+  return { html, listings };
+}
+
 // Main entry point: Fetch and parse listings (with pagination)
 async function fetchAndParseListings(searchParams) {
-  console.log(
-    "Starting PropertyGuru listing fetch with Puppeteer...",
-    searchParams,
-  );
+  const firstPage = await fetchResultsPage(searchParams, 1);
+  const allListings = [...firstPage.listings];
+  const totalPages = getTotalPages(firstPage.html);
 
-  const allListings = [];
+  for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
+    try {
+      // Small human-like pause between page loads.
+      await sleep(2000 + Math.random() * 2000);
 
-  // Each page is fetched in its own fresh browser session (fetchPropertyGuruHTML
-  // launches and tears down a browser per call). This is deliberate: reusing one
-  // session across pages leaves a stale cf_clearance cookie that makes
-  // navigateWithChallenge short-circuit its wait, so Cloudflare's per-navigation
-  // challenge never gets time to re-solve and every page after the first 403s. A
-  // fresh session has no cookie, polls while the challenge solves, and succeeds.
-  const firstPageUrl = buildSearchUrl(searchParams);
-  const firstPageHtml = await fetchPropertyGuruHTML(firstPageUrl);
-  const firstPageListings = parseListings(firstPageHtml);
-  allListings.push(...firstPageListings);
-  console.log(`First page: Found ${firstPageListings.length} listings`);
-
-  // Check for additional pages
-  const totalPages = getTotalPages(firstPageHtml);
-
-  if (totalPages > 1) {
-    console.log(`Found ${totalPages} total pages to fetch`);
-
-    for (let pageNum = 2; pageNum <= totalPages; pageNum++) {
-      console.log(`Fetching page ${pageNum}/${totalPages}...`);
-      try {
-        // Small human-like pause between page loads.
-        await sleep(2000 + Math.random() * 2000);
-
-        // PropertyGuru paginates by path (/property-for-sale/N); a ?page=N
-        // query is ignored.
-        const pageUrl = buildSearchUrl(searchParams, pageNum);
-        const pageHtml = await fetchPropertyGuruHTML(pageUrl);
-
-        const pageListings = parseListings(pageHtml);
-        allListings.push(...pageListings);
-        console.log(`  Page ${pageNum}: Found ${pageListings.length} listings`);
-      } catch (error) {
-        console.error(`Error fetching page ${pageNum}:`, error.message);
-      }
+      // PropertyGuru paginates by path (/property-for-sale/N); a ?page=N
+      // query is ignored.
+      const page = await fetchResultsPage(searchParams, pageNum, totalPages);
+      allListings.push(...page.listings);
+    } catch (error) {
+      console.error(
+        `Error fetching page ${pageNum}/${totalPages} (${buildSearchUrl(searchParams, pageNum)}):`,
+        error.message,
+      );
     }
-  } else {
-    console.log("No additional pages found");
   }
 
-  console.log(
-    `Fetch complete: Found ${allListings.length} total listings across all pages`,
-  );
   return allListings;
 }
 

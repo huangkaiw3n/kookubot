@@ -53,7 +53,6 @@ function saveSeenListings() {
       SEEN_LISTINGS_FILE,
       JSON.stringify(Object.fromEntries(seenListings), null, 2),
     );
-    console.log(`Saved ${seenListings.size} seen listings to file`);
   } catch (error) {
     console.error("Failed to save seen listings:", error.message);
   }
@@ -108,22 +107,16 @@ async function reviewIfNeeded(listing, search, resale) {
 async function processSearch(search, benchmarks, notificationErrors) {
   const allListings = await PropertyGuru.fetchAndParseListings(search.params);
   const listings = allListings.filter(search.keep);
-  console.log(
-    `[${search.name}] ${listings.length} of ${allListings.length} listings match`,
-  );
 
-  let newListingsCount = 0;
+  let newCount = 0;
+  let notifiedCount = 0;
   for (const listing of listings) {
     if (seenListings.has(listing.id)) {
       continue;
     }
 
-    console.log(`[${search.name}] New listing found:`, {
-      id: listing.id,
-      address: listing.address,
-      price: listing.price,
-      size: listing.size,
-    });
+    newCount++;
+    const description = `[${search.name}] New ${listing.id}: ${listing.address}, $${Number(listing.price).toLocaleString("en-SG")}, ${listing.size} sqft`;
 
     try {
       const resale = search.compareResale
@@ -131,19 +124,21 @@ async function processSearch(search, benchmarks, notificationErrors) {
         : null;
       const review = await reviewIfNeeded(listing, search, resale);
       const score = review && !(review instanceof Error) ? review.score : null;
+      let reviewLabel = "no review";
+      if (score !== null) reviewLabel = `score ${score}`;
+      else if (review instanceof Error) reviewLabel = "review failed";
 
       // Low scorers are marked seen so they aren't re-reviewed (and re-billed)
       // every run. Failed reviews are still sent.
       if (search.minScore && score !== null && score < search.minScore) {
-        console.log(
-          `[${search.name}] Skipping ${listing.id}: score ${score} below ${search.minScore}`,
-        );
+        console.log(`${description} → score ${score} < ${search.minScore}, skipped`);
         markSeen(listing, search, score, false);
         continue;
       }
 
       await notifyNewListing(listing, search, resale, review);
-      newListingsCount++;
+      notifiedCount++;
+      console.log(`${description} → ${reviewLabel}, sent`);
 
       // Mark as seen only after a successful notification, so a failed send
       // stays unseen and is retried on the next run.
@@ -157,17 +152,17 @@ async function processSearch(search, benchmarks, notificationErrors) {
     }
   }
 
-  return { name: search.name, found: listings.length, new: newListingsCount };
+  console.log(
+    `[${search.name}] ${listings.length} of ${allListings.length} listings match, ${newCount} new`,
+  );
+  return { name: search.name, found: listings.length, new: notifiedCount };
 }
 
 // Main function
 async function run() {
   const startTime = Date.now();
 
-  console.log("PropertyGuru monitor started", {
-    timestamp: new Date().toISOString(),
-    searches: SEARCHES.map((search) => search.name),
-  });
+  console.log(`Run started: ${SEARCHES.map((search) => search.name).join(", ")}`);
 
   try {
     // Tell Cronitor the run started (enables duration + hung-job detection).
@@ -198,10 +193,7 @@ async function run() {
 
     const duration = Date.now() - startTime;
     const newListings = results.reduce((sum, r) => sum + r.new, 0);
-    console.log("PropertyGuru monitor completed", {
-      results,
-      duration: `${duration}ms`,
-    });
+    console.log(`Run completed in ${Math.round(duration / 1000)}s`);
 
     // Only notify Telegram when there are new listings. Liveness is tracked
     // by Cronitor (see pingCronitor below), not a self-sent uptime heartbeat.
@@ -222,8 +214,6 @@ async function run() {
         console.error("Failed to send summary message:", error.message);
         notificationErrors.push(error);
       }
-    } else {
-      console.log("No new listings — nothing to notify");
     }
 
     if (searchErrors.length > 0) {
@@ -259,14 +249,12 @@ function startScheduler() {
   loadSeenListings();
 
   // Run immediately on startup
-  console.log("Running initial check...");
   run().catch((error) => {
     console.error("Initial run failed:", error);
   });
 
   // Schedule to run based on configured pattern
   const job = schedule.scheduleJob(SCHEDULE_PATTERN, async () => {
-    console.log("\n=== Scheduled run triggered ===");
     try {
       await run();
     } catch (error) {
